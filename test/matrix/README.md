@@ -57,3 +57,14 @@ are removed on exit, images are kept for reuse. No other Docker object is touche
   sysctl behaviour; `systemd-logind` and udev are masked.
 * `--privileged` is used for simplicity; a container is not a security boundary for this test.
 * Mail stack, project deploys and Cloudflare real-IP behaviour are not covered beyond the install.
+
+## Known results and emulation limits (2026-11-15, Docker Desktop on WSL2)
+
+Full matrix (Ubuntu 22.04/24.04/25.04, Debian 12/13 x amd64/arm64) with Node 24 and 26; Node 20 and 22 on amd64 only.
+- amd64: every OS passes for Node 20, 22, 24 and 26.
+- arm64 (QEMU user-mode emulation): passes everywhere except Debian 13, where the portal unit fails with
+  `status=226/NAMESPACE`. Systemd mount-namespace sandboxing (`ReadOnlyPaths`, `ProtectSystem=strict`, sometimes
+  `ReadWritePaths`) fails non-deterministically under QEMU on that image; the unit uses nothing unusual. Treat Debian 13
+  arm64 as unverified until it runs on real arm64 hardware.
+- Occasional `qemu: uncaught target signal 11` inside `dpkg` (libc-bin) is an emulator crash, not an installer bug; rerun.
+- Fixed by this matrix: `nginx -t` failed on every arm64 case (32-byte `server_names_hash_bucket_size`).
