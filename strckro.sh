@@ -79,6 +79,24 @@ PREVIOUS_HELPER_ENABLED=false
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+certbot_with_lock_retry() {
+  local attempt output status
+  for attempt in {1..7}; do
+    if output="$(LC_ALL=C certbot "$@" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    else
+      status=$?
+    fi
+    printf '%s\n' "$output" >&2
+    if [[ "$output" != *'Another instance of Certbot is already running.'* || "$attempt" -eq 7 ]]; then
+      return "$status"
+    fi
+    echo 'Certbot is busy; retrying in 5 seconds.' >&2
+    sleep 5
+  done
+}
+
 set_config_value() {
   local key="$1" value="$2" file="$3"
   if grep -q "^${key}=" "$file"; then
@@ -489,7 +507,11 @@ rm -f -- "$LEGACY_UPDATE_COMMAND" "$HELPER_ROOT/dashboard-portal-update.mjs"
 
 install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$DATA_ROOT" "$DATA_ROOT/projects"
 install -d -m 0750 -o root -g "$APP_USER" "$CONFIG_ROOT"
-install -d -m 0750 -o root -g root /etc/hostmgr /etc/hostmgr/projects
+project_config_mode=0750
+# Dovecot needs to traverse this parent to reach its group-protected files.
+if [[ -f "$PROJECT_CONFIG_DIR/mail/.portal-installed" ]]; then project_config_mode=0711; fi
+install -d -m "$project_config_mode" -o root -g root "$PROJECT_CONFIG_DIR"
+install -d -m 0750 -o root -g root "$PROJECT_CONFIG_DIR/projects"
 # Services need only traverse these parents to reach their own project or the
 # ACME webroot.  Do not grant directory listing to unrelated local users.
 install -d -m 0711 -o root -g root /var/lib/hostmgr /srv/hostmgr /srv/hostmgr/projects
@@ -745,7 +767,7 @@ done
 curl --fail --silent --show-error "http://127.0.0.1:${PORT}/api/health" >/dev/null || die 'Strckro did not pass its loopback health check.'
 systemctl reload nginx
 
-certbot --nginx --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" --redirect --hsts
+certbot_with_lock_retry --nginx --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" --redirect --hsts
 curl --fail --silent --show-error --max-time 15 "https://${DOMAIN}/api/health" >/dev/null || die 'HTTPS health check failed after certificate issuance.'
 
 # Only now, with the new release serving over HTTPS, is it safe to drop runtimes it replaced.
