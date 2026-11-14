@@ -760,6 +760,13 @@ install_realip_conf() {
 nginx_test() {
   local output
   if output="$(nginx -t 2>&1)"; then return 0; fi
+  if [[ -f "$NGINX_LIMITS_CONF" && "$output" == *'server_names_hash_bucket_size'*'directive is duplicate'* ]]; then
+    sed -i '/^server_names_hash_bucket_size /d' "$NGINX_LIMITS_CONF"
+    echo "WARNING: Nginx already sets server_names_hash_bucket_size (${output%%$'
+'*}). Strckro's value was dropped and the host's setting stays." >&2
+    nginx_test
+    return
+  fi
   if [[ -f "$NGINX_REALIP_CONF" && "$output" == *'real_ip_'*'directive is duplicate'* ]]; then
     rm -f -- "$NGINX_REALIP_CONF"
     echo "WARNING: Nginx already has a real_ip_header or real_ip_recursive of its own (${output%%$'\n'*}). Strckro's real-IP file was not installed and the host's setting stays, so the Portal's limits count whatever address it reports." >&2
@@ -779,6 +786,9 @@ cat > "$TMP_DIR/limits.conf" <<'EOF'
 # One IPv6 subscriber holds a whole /64 and can use a new address for every request, so an IPv6
 # visitor is counted as its /64 (the first 8 of the 16 bytes of the address); an IPv4 visitor
 # (4 bytes) is counted by address.
+# Nginx sizes this bucket from the CPU cache line (32 bytes on some arm64 CPUs, 64 on x86), and a
+# 32-byte bucket cannot hold an ordinary domain name, so 'nginx -t' fails on those hosts.
+server_names_hash_bucket_size 64;
 map $binary_remote_addr $strckro_visitor {
     "~(?s)^(?<network>.{8}).{8}$"  $network;
     default                         $binary_remote_addr;
