@@ -1,0 +1,32 @@
+#!/bin/bash
+# TEST-ONLY certbot stand-in. NOT part of the product. Real ACME is NOT exercised.
+# Emulates `certbot --nginx --redirect --hsts -d <domain>` with a throwaway local CA:
+#  - issues a leaf cert for the domain, trusts the CA system-wide (so plain curl works),
+#  - rewrites the installer's port-80 site into redirect(80) + TLS(443) with HSTS.
+set -euo pipefail
+domain=''; args=("$@")
+for ((i=0;i<${#args[@]};i++)); do [[ "${args[i]}" == -d ]] && domain="${args[i+1]}"; done
+[[ -n "$domain" ]] || { echo 'certbot-shim: no -d domain' >&2; exit 2; }
+echo "certbot-shim: $* (self-signed, test only)"
+d=/etc/strckro-matrix-tls; install -d -m 0700 "$d"
+if [[ ! -f "$d/ca.pem" ]]; then
+  openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=strckro-matrix-test-ca' -keyout "$d/ca.key" -out "$d/ca.pem" 2>/dev/null
+  install -m 0644 "$d/ca.pem" /usr/local/share/ca-certificates/strckro-matrix-ca.crt
+  update-ca-certificates >/dev/null
+fi
+openssl req -newkey rsa:2048 -nodes -subj "/CN=$domain" -keyout "$d/$domain.key" -out "$d/$domain.csr" 2>/dev/null
+printf 'subjectAltName=DNS:%s\n' "$domain" > "$d/san.ext"
+openssl x509 -req -in "$d/$domain.csr" -CA "$d/ca.pem" -CAkey "$d/ca.key" -CAcreateserial -days 30 -extfile "$d/san.ext" -out "$d/$domain.pem" 2>/dev/null
+site=$(grep -lE "^\s*server_name\s+${domain//./\.}\s*;" /etc/nginx/sites-enabled/* | head -1)
+[[ -n "$site" ]] || { echo "certbot-shim: no nginx site for $domain" >&2; exit 1; }
+src=$(readlink -f "$site")
+orig=$(cat "$src")
+{
+  printf 'server {\n    listen 80;\n    listen [::]:80;\n    server_name %s;\n    return 301 https://$host$request_uri;\n}\n' "$domain"
+  printf '%s\n' "$orig" | sed \
+    -e 's/listen 80;/listen 443 ssl;/' -e 's/listen \[::\]:80;/listen [::]:443 ssl;/' \
+    -e "s|^\(\s*\)server_name ${domain//./\.};|&\n\1ssl_certificate $d/$domain.pem;\n\1ssl_certificate_key $d/$domain.key;\n\1add_header Strict-Transport-Security \"max-age=31536000\" always;|"
+} > "$src.new"
+mv "$src.new" "$src"
+nginx -t
+systemctl restart nginx   # synchronous; a plain reload races the installer's immediate curl
