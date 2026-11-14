@@ -33,7 +33,9 @@ async function fixture(t) {
   for (const sub of ['units', 'projects', 'proc', join('proc', 'self')]) await mkdir(join(dir, sub), { recursive: true });
   const prune = (extra = '') => spawnSync(bash, ['-s'], {
     encoding: 'utf8',
-    input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/* 2>/dev/null || true\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_SHA256=unused\nNODE_RUNTIME_ROOT='${root}/opt'\nSERVICE_UNIT_DIR='${root}/units'\nPROJECT_CONFIG_DIR='${root}/projects'\nPROC_DIR='${root}/proc'\n${definitions}\n${extra}\nprune_node_runtimes\n`
+    input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/* 2>/dev/null || true\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_ARCH=x64
+NODE_SHA256_X64=unused
+NODE_SHA256_ARM64=unused\nNODE_RUNTIME_ROOT='${root}/opt'\nSERVICE_UNIT_DIR='${root}/units'\nPROJECT_CONFIG_DIR='${root}/projects'\nPROC_DIR='${root}/proc'\n${definitions}\n${extra}\nprune_node_runtimes\n`
   });
   return { dir, root, prune };
 }

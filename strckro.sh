@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Direct installer for one Ubuntu 24.04 or 25.04 host. It intentionally refuses an
+# Direct installer for one Ubuntu 22.04/24.04/25.04 or Debian 12/13 host (amd64 or arm64). It intentionally refuses an
 # HTTP-only installation: this service has a login and must not expose it over
 # cleartext traffic.
 set -Eeuo pipefail
@@ -60,11 +60,15 @@ NODE_RUNTIME_ROOT='/opt'
 SERVICE_UNIT_DIR='/etc/systemd/system'
 PROJECT_CONFIG_DIR='/etc/hostmgr'
 PROC_DIR='/proc'
+# Only used when Nginx predates ssl_reject_handshake; scripts/nginx-edge.mjs looks here too.
+UNMATCHED_TLS_DIR='/etc/hostmgr/unmatched-tls'
 PORT='3100'
 NODE_VERSION='24.22.2'
-NODE_SHA256='48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75'
+NODE_SHA256_X64='48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75'
+NODE_SHA256_ARM64='eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8'
 BUN_VERSION='1.3.13'
-BUN_SHA256='9d8a24292a7068090205daac0a5a223f5f69736f5287e37bf88d3b4031edc750'
+BUN_SHA256_X64='9d8a24292a7068090205daac0a5a223f5f69736f5287e37bf88d3b4031edc750'
+BUN_SHA256_ARM64='70bae41b3908b0a120e1e58c5c8af30e74afae3b8d11b0d3fdd8e787ddfb4b22'
 GO_VERSION='1.27.1'
 GO_SHA256='63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445'
 
@@ -203,8 +207,16 @@ fi
 [[ -n "$EMAIL" && "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die 'A valid --email is required. HTTPS is mandatory for a public login.'
 [[ -f package.json && -f package-lock.json && -d src && -d public && -f scripts/hostmgr-deploy-helper.mjs && -f scripts/sqlite.mjs && -f scripts/node-versions.mjs && -f scripts/maintenance-lock.mjs && -f scripts/worker-health.mjs && -f scripts/worker-activation.mjs && -f scripts/mail-host-config.mjs && -f scripts/maildir-store.mjs && -f scripts/nginx-edge.mjs && -f scripts/domain-dns.mjs && -f scripts/nginx-realip.mjs &&-f scripts/password-config.mjs && -f scripts/strckro-update.mjs && -f scripts/software-update.mjs && -f "$UPDATE_PUBLIC_KEY_SOURCE" ]] || die 'Run this script from an extracted Strckro release directory.'
 source /etc/os-release
-[[ "${ID:-}" == 'ubuntu' && ( "${VERSION_ID:-}" == '24.04' || "${VERSION_ID:-}" == '25.04' ) ]] || die 'This installer supports Ubuntu 24.04 or 25.04 only.'
-[[ "$(dpkg --print-architecture)" == 'amd64' ]] || die 'This release currently supports amd64 only.'
+case "${ID:-}:${VERSION_ID:-}" in
+  ubuntu:22.04|ubuntu:24.04|ubuntu:25.04|debian:12|debian:13) ;;
+  *) die 'This installer supports Ubuntu 22.04, 24.04 or 25.04 and Debian 12 or 13 only.' ;;
+esac
+# Runtime archives name the CPU differently: Node.js x64/arm64, Bun x64-baseline/aarch64.
+case "$(dpkg --print-architecture)" in
+  amd64) NODE_ARCH='x64'; BUN_ARCHIVE_NAME='bun-linux-x64-baseline'; BUN_SHA256="$BUN_SHA256_X64" ;;
+  arm64) NODE_ARCH='arm64'; BUN_ARCHIVE_NAME='bun-linux-aarch64'; BUN_SHA256="$BUN_SHA256_ARM64" ;;
+  *) die 'This release supports amd64 and arm64 only.' ;;
+esac
 
 # DNS must already exist before Certbot starts. This proves only name
 # resolution; firewall and inbound routing are checked by the ACME challenge.
@@ -286,24 +298,31 @@ export DEBIAN_FRONTEND=noninteractive
 # prior deployment to leave `/tmp` inaccessible to package verification.
 chmod 1777 /tmp
 apt-get update
-apt-get install -y --no-install-recommends nginx certbot python3-certbot-nginx curl ca-certificates xz-utils unzip git
+apt-get install -y --no-install-recommends nginx certbot python3-certbot-nginx curl ca-certificates xz-utils unzip git openssl
 if [[ "$PORTAL_NODE_MAJOR" == '20' ]]; then
   apt-get install -y --no-install-recommends build-essential python3
   echo 'WARNING: Node.js 20 is end of life and the October 2026 Node.js security release has no 20.x build. Move the Portal to Node.js 24 when you can (--node-major=24, after a backup).' >&2
 fi
-# libatomic1 is needed by any provisioned Node.js 26, not only a Portal running on it.
-if [[ "$PORTAL_NODE_MAJOR" == '26' ]] || compgen -G '/opt/node-v26.*' >/dev/null; then apt-get install -y --no-install-recommends libatomic1; fi
+# libatomic1 is needed by any provisioned Node.js 26 (not only a Portal running on it) and by the
+# official arm64 Node.js builds; a minimal Debian image does not ship it.
+if [[ "$PORTAL_NODE_MAJOR" == '26' || "$NODE_ARCH" == 'arm64' ]] || compgen -G '/opt/node-v26.*' >/dev/null; then apt-get install -y --no-install-recommends libatomic1; fi
 
-# Pinned Linux x64 runtimes. Checksums come from the signed SHASUMS256.txt of each
+# Pinned Linux x64 and arm64 runtimes. Checksums come from the SHASUMS256.txt of each
 # release on nodejs.org; scripts/node-versions.mjs must name the same versions
-# (a test compares them).
+# (a test compares them). NODE_ARCH is x64 or arm64, chosen from dpkg above.
 node_pin() {
+  local sha_x64 sha_arm64
   case "$1" in
-    20) NODE_PIN_VERSION='20.20.2'; NODE_PIN_SHA='df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d' ;;
-    22) NODE_PIN_VERSION='22.23.4'; NODE_PIN_SHA='1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce' ;;
-    24) NODE_PIN_VERSION="$NODE_VERSION"; NODE_PIN_SHA="$NODE_SHA256" ;;
-    26) NODE_PIN_VERSION='26.13.0'; NODE_PIN_SHA='d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997' ;;
+    20) NODE_PIN_VERSION='20.20.2'; sha_x64='df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d'; sha_arm64='73093db209e4e9e09dd7d15a47aeaab1b74833830df03efa5f942a1122c5fa71' ;;
+    22) NODE_PIN_VERSION='22.23.4'; sha_x64='1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce'; sha_arm64='6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b' ;;
+    24) NODE_PIN_VERSION="$NODE_VERSION"; sha_x64="$NODE_SHA256_X64"; sha_arm64="$NODE_SHA256_ARM64" ;;
+    26) NODE_PIN_VERSION='26.13.0'; sha_x64='d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997'; sha_arm64='406fe3fbde1c054adff8b297c16fdb5af6659db327c1ac8acd46b56ef1af9a92' ;;
     *) die "Unsupported Node.js major: $1" ;;
+  esac
+  case "$NODE_ARCH" in
+    x64) NODE_PIN_SHA="$sha_x64" ;;
+    arm64) NODE_PIN_SHA="$sha_arm64" ;;
+    *) die "Unsupported Node.js architecture: $NODE_ARCH" ;;
   esac
 }
 
@@ -313,7 +332,7 @@ install_node_version() {
   version="$NODE_PIN_VERSION"; sha="$NODE_PIN_SHA"
   target="/opt/node-v${version}"
   if [[ ! -x "$target/bin/node" ]]; then
-    archive="node-v${version}-linux-x64.tar.xz"
+    archive="node-v${version}-linux-${NODE_ARCH}.tar.xz"
     curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
       "https://nodejs.org/dist/v${version}/${archive}" -o "$TMP_DIR/$archive"
     printf '%s  %s\n' "$sha" "$TMP_DIR/$archive" | sha256sum --check --status || die "Node.js ${version} archive checksum verification failed."
@@ -422,18 +441,18 @@ if [[ -x "$(dirname "$PORTAL_NODE")/corepack" ]]; then ln -sfn "$(dirname "$PORT
 [[ "$(/usr/local/bin/node --version)" == "$("$PORTAL_NODE" --version)" ]] || die 'Installed Node.js version did not match the selected runtime.'
 "/usr/local/bin/npm" --version >/dev/null || die 'Installed Node.js npm runtime could not be executed.'
 
-# Bun is a project runtime, not a dependency of Strckro itself. Pin
-# and verify the baseline x64 binary so projects can safely select it after a
-# fresh install or an ordinary Portal update.
+# Bun is a project runtime, not a dependency of Strckro itself. Pin and verify the
+# baseline build on x64 (no AVX2 requirement) or the aarch64 build so projects can
+# safely select it after a fresh install or an ordinary Portal update.
 if [[ ! -x "/opt/bun-v${BUN_VERSION}/bin/bun" ]]; then
-  bun_archive="bun-linux-x64-baseline.zip"
+  bun_archive="${BUN_ARCHIVE_NAME}.zip"
   curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
     "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${bun_archive}" -o "$TMP_DIR/$bun_archive"
   printf '%s  %s\n' "$BUN_SHA256" "$TMP_DIR/$bun_archive" | sha256sum --check --status || die 'Bun archive checksum verification failed.'
   unzip -q "$TMP_DIR/$bun_archive" -d "$TMP_DIR/bun"
-  [[ -x "$TMP_DIR/bun/bun-linux-x64-baseline/bun" ]] || die 'Bun archive did not contain the expected executable.'
+  [[ -x "$TMP_DIR/bun/${BUN_ARCHIVE_NAME}/bun" ]] || die 'Bun archive did not contain the expected executable.'
   install -d -m 0755 "/opt/bun-v${BUN_VERSION}/bin"
-  install -m 0755 "$TMP_DIR/bun/bun-linux-x64-baseline/bun" "/opt/bun-v${BUN_VERSION}/bin/bun"
+  install -m 0755 "$TMP_DIR/bun/${BUN_ARCHIVE_NAME}/bun" "/opt/bun-v${BUN_VERSION}/bin/bun"
 fi
 ln -sfn "/opt/bun-v${BUN_VERSION}/bin/bun" /usr/local/bin/bun
 "/usr/local/bin/bun" --version | grep -qx "${BUN_VERSION}" || die 'Installed Bun version did not match the pinned release.'
@@ -625,7 +644,7 @@ AmbientCapabilities=CAP_SETUID CAP_SETGID
 PrivateTmp=true
 ProtectHome=true
 # shadow-utils performs lock and atomic-rename operations across /etc. On
-# Ubuntu, ProtectSystem=full breaks those operations even with ReadWritePaths
+# Ubuntu (and Debian), ProtectSystem=full breaks those operations even with ReadWritePaths
 # exceptions. The helper remains root-owned and reachable only through its
 # bounded Unix-socket operation allowlist; do not re-enable ProtectSystem here.
 ProtectSystem=false
@@ -681,6 +700,11 @@ EOF
 chown root:root "$NGINX_SITE"
 chmod 0644 "$NGINX_SITE"
 ln -sfn "$NGINX_SITE" "$NGINX_ENABLED"
+# ssl_reject_handshake needs Nginx 1.19.4; Ubuntu 22.04 ships 1.18. There the TLS catch-all
+# answers with a throwaway self-signed certificate and closes the connection (444) instead.
+# The certificate's presence is also how the Portal helper renders the same catch-all later.
+nginx_version="$(nginx -v 2>&1 | sed -n 's|^nginx version: nginx/\([0-9.]*\).*|\1|p')"
+[[ "$nginx_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Could not read the installed Nginx version.'
 cat > /etc/nginx/sites-available/hostmgr-unmatched.conf <<'EOF'
 # Managed by Dashboard Portal. Do not edit.
 server {
@@ -694,12 +718,23 @@ server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
     server_name _;
-    ssl_reject_handshake on;
-}
 EOF
+if [[ "$(printf '%s\n%s\n' "$nginx_version" 1.19.4 | sort -V | head -n 1)" == '1.19.4' ]]; then
+  printf '    ssl_reject_handshake on;\n}\n' >> /etc/nginx/sites-available/hostmgr-unmatched.conf
+else
+  install -d -m 0755 -o root -g root "$UNMATCHED_TLS_DIR"
+  if [[ ! -s "$UNMATCHED_TLS_DIR/key.pem" || ! -s "$UNMATCHED_TLS_DIR/cert.pem" ]]; then
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj '/CN=strckro-unmatched' \
+      -keyout "$UNMATCHED_TLS_DIR/key.pem" -out "$UNMATCHED_TLS_DIR/cert.pem" >/dev/null 2>&1 || die 'Could not create the unmatched-host TLS certificate.'
+  fi
+  chown root:root "$UNMATCHED_TLS_DIR/key.pem" "$UNMATCHED_TLS_DIR/cert.pem"
+  chmod 0600 "$UNMATCHED_TLS_DIR/key.pem"
+  chmod 0644 "$UNMATCHED_TLS_DIR/cert.pem"
+  printf '    ssl_certificate %s/cert.pem;\n    ssl_certificate_key %s/key.pem;\n    return 444;\n}\n' "$UNMATCHED_TLS_DIR" "$UNMATCHED_TLS_DIR" >> /etc/nginx/sites-available/hostmgr-unmatched.conf
+fi
 chown root:root /etc/nginx/sites-available/hostmgr-unmatched.conf
 chmod 0644 /etc/nginx/sites-available/hostmgr-unmatched.conf
-# The Ubuntu package ships this exact catch-all as a default server. Keep a
+# The Ubuntu and Debian packages ship this exact catch-all as a default server. Keep a
 # Portal-managed reject catch-all instead, but never remove a custom site.
 if [[ -L "$NGINX_DEFAULT_ENABLED" && "$(readlink -f "$NGINX_DEFAULT_ENABLED")" == '/etc/nginx/sites-available/default' ]]; then
   rm "$NGINX_DEFAULT_ENABLED"

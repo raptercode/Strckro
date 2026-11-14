@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Public bootstrap: serve this file as https://dashboard-portal.cloud/install.sh.
+# Public bootstrap (Ubuntu 22.04/24.04/25.04 and Debian 12/13, amd64 or arm64): serve this file as https://dashboard-portal.cloud/install.sh.
 set -Eeuo pipefail
 umask 077
 
@@ -13,6 +13,7 @@ usage() {
     'Latest stable: curl -fsSL https://dashboard-portal.cloud/install.sh | bash' \
     'Specific version: curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --version v1.1.0' \
     'Version tags must include v (e.g. v1.1.0). Domain and a valid TLS email are required and prompted in the terminal.' \
+    'Supported hosts: Ubuntu 22.04, 24.04, 25.04 and Debian 12, 13 on amd64 or arm64.' \
     'Portal Node major defaults to 24; advanced option: --node-major=20|22|24|26.'
 }
 while (( $# )); do
@@ -29,11 +30,17 @@ while (( $# )); do
 done
 [[ -z "$VERSION" || "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Version must look like v1.1.0.'
 [[ "$NODE_MAJOR" =~ ^(20|22|24|26)$ ]] || die 'Node major must be 20, 22, 24 or 26.'
-[[ "$(uname -s)" == 'Linux' ]] || die 'Run on an Ubuntu server.'
+[[ "$(uname -s)" == 'Linux' ]] || die 'Run on an Ubuntu or Debian server.'
 source /etc/os-release
-[[ "${ID:-}" == 'ubuntu' && ( "${VERSION_ID:-}" == '24.04' || "${VERSION_ID:-}" == '25.04' ) ]] || die 'This release supports Ubuntu 24.04 or 25.04 only.'
-[[ "$(uname -m)" == 'x86_64' ]] || die 'This release supports amd64 only.'
-for tool in curl tar sha256sum mktemp; do command -v "$tool" >/dev/null || die "Required tool missing: $tool"; done
+case "${ID:-}:${VERSION_ID:-}" in
+  ubuntu:22.04|ubuntu:24.04|ubuntu:25.04|debian:12|debian:13) ;;
+  *) die 'This release supports Ubuntu 22.04, 24.04 or 25.04 and Debian 12 or 13 only.' ;;
+esac
+case "$(uname -m)" in
+  x86_64|aarch64) ;;
+  *) die 'This release supports amd64 and arm64 only.' ;;
+esac
+for tool in curl tar sha256sum mktemp; do command -v "$tool" >/dev/null || die "Required tool missing: $tool (on a minimal Debian image: apt-get install -y curl ca-certificates)"; done
 if [[ $EUID -ne 0 ]]; then command -v sudo >/dev/null || die 'A sudo-capable account is required.'; fi
 # stdin contains the script when invoked through curl | bash. Keep every prompt,
 # sudo and the underlying password setup on the controlling terminal instead.
