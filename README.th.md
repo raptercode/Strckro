@@ -25,7 +25,7 @@ Strckro รันโค้ดจาก repository ที่เชื่อมไ
 
 ## ติดตั้ง
 
-เปิด SSH แบบ interactive บน Ubuntu 24.04 หรือ 25.04 amd64 ด้วยบัญชีที่ใช้ sudo ได้ ให้ DNS ของโดเมนชี้มาที่เซิร์ฟเวอร์และเปิด TCP ขาเข้า 80 กับ 443
+เปิด SSH แบบ interactive บน Ubuntu 22.04, 24.04 หรือ 25.04 หรือ Debian 12 หรือ 13 (amd64 หรือ arm64) ด้วยบัญชีที่ใช้ sudo ได้ (หรือ root) ให้ DNS ของโดเมนชี้มาที่เซิร์ฟเวอร์และเปิด TCP ขาเข้า 80 กับ 443
 
 ```bash
 curl -fsSL https://dashboard-portal.cloud/install.sh | bash

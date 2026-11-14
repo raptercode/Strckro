@@ -34,8 +34,9 @@ Status labels used below:
 ## Target environment
 
 ```text
-Ubuntu Server 24.04 LTS amd64
-Ubuntu Server 25.04 amd64 (operational exception; see ADR 0012)
+Ubuntu Server 22.04 LTS, 24.04 LTS (amd64, arm64)
+Debian 12, 13 (amd64, arm64)
+Ubuntu Server 25.04 (amd64, arm64; operational exception, see ADR 0012)
 ```
 
 Early testing focuses on this environment to reduce complexity. Other

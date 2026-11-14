@@ -5,7 +5,7 @@
 หลังติดตั้งใช้ `strckro -h` หรือ `--help` ดูคำสั่ง CLI ทั้งหมด และ `strckro -v` หรือ `--versions` ดู Portal/runtime versions โดยไม่ต้อง sudo ใช้ `dashboard-portal update --help` ดูคู่มือได้เช่นกัน ส่วน update, configure-update และ reset password ยังต้อง sudo
 
 
-คู่มือนี้ใช้กับ **Ubuntu Server 24.04 หรือ 25.04, amd64** ที่ผ่านเงื่อนไข installer การติดตั้งจริงใช้ systemd และ Nginx; Docker Compose ใน repository ใช้ทดลองบนเครื่องพัฒนา
+คู่มือนี้ใช้กับ **Ubuntu Server 22.04, 24.04 หรือ 25.04 และ Debian 12 หรือ 13 บน amd64 หรือ arm64** ที่ผ่านเงื่อนไข installer การติดตั้งจริงใช้ systemd และ Nginx; Docker Compose ใน repository ใช้ทดลองบนเครื่องพัฒนา
 
 ## เตรียมเครื่อง
 

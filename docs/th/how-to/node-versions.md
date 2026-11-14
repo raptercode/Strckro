@@ -42,7 +42,7 @@ systemctl show dashboard-portal -p ExecStart
 
 1. เลือก release ที่ [nodejs.org/dist](https://nodejs.org/dist/) แล้วดาวน์โหลด `SHASUMS256.txt` และ `SHASUMS256.txt.asc`
 2. ตรวจลายเซ็นด้วย `gpg --verify` โดย fingerprint ของ key ที่เซ็นต้องอยู่ในรายการ release keys ของ [README Node.js](https://github.com/nodejs/node#release-keys) และนำเข้า key จาก [nodejs/release-keys](https://github.com/nodejs/release-keys)
-3. คัดลอก hash ของ `node-v<version>-linux-x64.tar.xz` ไปใส่ `node_pin()` ใน `strckro.sh` (Node 24 ใช้ `NODE_VERSION` กับ `NODE_SHA256` ต้นไฟล์) แล้วแก้เวอร์ชันใน `scripts/node-versions.mjs` Dockerfile และตารางด้านบน หากไม่ตรงกันเทสต์จะล้ม
+3. คัดลอก hash ของ `node-v<version>-linux-x64.tar.xz` และ `node-v<version>-linux-arm64.tar.xz` ไปใส่ `node_pin()` ใน `strckro.sh` (Node 24 ใช้ `NODE_VERSION`, `NODE_SHA256_X64` และ `NODE_SHA256_ARM64` ต้นไฟล์) แล้วแก้เวอร์ชันใน `scripts/node-versions.mjs` Dockerfile และตารางด้านบน หากไม่ตรงกันเทสต์จะล้ม
 4. รัน `npm test` และลองอัปเดตด้วย installer บน host ก่อนเผยแพร่
 
 ## ผลต่อฐานข้อมูลและลูกค้าที่อัปเดต

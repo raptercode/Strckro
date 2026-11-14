@@ -5,7 +5,7 @@ Localized topic guide; the original detailed record is available in [Thai](../..
 
 ## Prepare the server
 
-The current installer accepts Ubuntu 24.04 or 25.04, amd64. Use root or a sudo-capable account, a domain resolving to this host, inbound TCP 80/443 and free loopback port 3100. Check DNS from the host with `getent ahosts portal.example.com`. For a CDN, use DNS-only during initial certificate issuance, then verify origin HTTPS before enabling proxying. Back up existing Nginx and services and start with a staging host.
+The current installer accepts Ubuntu 22.04, 24.04 or 25.04 and Debian 12 or 13, on amd64 or arm64. Use root or a sudo-capable account, a domain resolving to this host, inbound TCP 80/443 and free loopback port 3100. Check DNS from the host with `getent ahosts portal.example.com`. For a CDN, use DNS-only during initial certificate issuance, then verify origin HTTPS before enabling proxying. Back up existing Nginx and services and start with a staging host.
 
 ## Install
 
@@ -59,7 +59,7 @@ The installer provisions the selected pinned Portal Node runtime, Bun, Git, Ngin
 | `dashboard-portal` | Unprivileged Portal service |
 | `hostmgr-deploy-helper` | Root-owned helper with allowlisted operations |
 
-Only managed Nginx files are modified. The original Ubuntu default-site symlink can be replaced with a reject catch-all; unrelated virtual hosts remain externally owned.
+Only managed Nginx files are modified. The original Ubuntu or Debian default-site symlink can be replaced with a reject catch-all (on Nginx older than 1.19.4, such as Ubuntu 22.04, it answers TLS with a throwaway self-signed certificate under `/etc/hostmgr/unmatched-tls` instead of `ssl_reject_handshake`); unrelated virtual hosts remain externally owned.
 
 ## Visitor addresses behind Cloudflare Proxy
 

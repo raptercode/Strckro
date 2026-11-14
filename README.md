@@ -25,7 +25,7 @@ Strckro runs code from the repositories you connect. Use trusted repositories on
 
 ## Install
 
-Use an interactive SSH session on an Ubuntu 24.04 or 25.04 amd64 server with sudo access. Point a domain at the server and allow inbound TCP ports 80 and 443.
+Use an interactive SSH session on an Ubuntu 22.04, 24.04 or 25.04, or Debian 12 or 13, server (amd64 or arm64) with sudo access (or as root). Point a domain at the server and allow inbound TCP ports 80 and 443.
 
 ```bash
 curl -fsSL https://dashboard-portal.cloud/install.sh | bash
