@@ -69,7 +69,7 @@ async function nginxFixture(t, { ours = true } = {}) {
   // `nginx` is replaced by a function that answers like the scenario says, first call and later calls.
   const run = (first, later) => spawnSync(bash, ['-s'], {
     encoding: 'utf8',
-    input: `set -euo pipefail\nNGINX_REALIP_CONF='${root}/conf.d/strckro-realip.conf'\nnginx() { local n; n=$(<'${root}/calls'); echo $((n + 1)) > '${root}/calls'; if [[ "$n" == 0 ]]; then printf '%s\\n' '${first.output}' >&2; return ${first.code}; fi; printf '%s\\n' '${later.output}' >&2; return ${later.code}; }\n${nginxTestDefinition}\nnginx_test\n`
+    input: `set -euo pipefail\nNGINX_REALIP_CONF='${root}/conf.d/strckro-realip.conf'\nNGINX_LIMITS_CONF='${root}/conf.d/strckro-limits.conf'\nnginx() { local n; n=$(<'${root}/calls'); echo $((n + 1)) > '${root}/calls'; if [[ "$n" == 0 ]]; then printf '%s\\n' '${first.output}' >&2; return ${first.code}; fi; printf '%s\\n' '${later.output}' >&2; return ${later.code}; }\n${nginxTestDefinition}\nnginx_test\n`
   });
   return { dir, run, file: join(dir, 'conf.d', 'strckro-realip.conf') };
 }
@@ -91,6 +91,16 @@ test('a duplicate real_ip directive from the host drops only Strckro\'s file, sa
     assert.equal(await exists(file), false, 'its file is removed so the host\'s own setting is the only one');
     assert.equal((await readFile(join(dir, 'calls'), 'utf8')).trim(), '2', 'nginx is asked again');
   }
+});
+
+test('a duplicate server_names_hash_bucket_size from the host drops only the Strckro value and the update goes on', { skip: !available }, async (t) => {
+  const { run, dir } = await nginxFixture(t);
+  const limits = join(dir, 'conf.d', 'strckro-limits.conf');
+  await writeFile(limits, 'server_names_hash_bucket_size 64;\nlimit_req_zone x;\n');
+  const result = run({ output: '[emerg] "server_names_hash_bucket_size" directive is duplicate in /etc/nginx/nginx.conf:9', code: 1 }, { output: 'test is successful', code: 0 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /WARNING: Nginx already sets server_names_hash_bucket_size/);
+  assert.equal(await readFile(limits, 'utf8'), 'limit_req_zone x;\n');
 });
 
 test('anything else that fails stays a failure, and Strckro\'s file is left for the rollback', { skip: !available }, async (t) => {

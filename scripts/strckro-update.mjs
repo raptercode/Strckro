@@ -74,7 +74,7 @@ async function update(values) {
     await run('/bin/tar', ['--extract', '--gzip', '--file', archive, '--directory', extracted, '--no-same-owner', '--no-same-permissions']);
     const releaseRoot = await releaseDirectory(extracted);
     console.log('Checksum and signature verified. Installing staged release...');
-    await run('/usr/bin/bash', [join(releaseRoot, 'strckro.sh'), `--domain=${config.HOSTMGR_PORTAL_DOMAIN ?? ''}`, `--email=${config.HOSTMGR_ACME_EMAIL ?? ''}`, `--node-major=${nodeMajor}`], { cwd: releaseRoot, inherit: true });
+    await run('/usr/bin/bash', [join(releaseRoot, 'strckro.sh'), `--domain=${config.HOSTMGR_PORTAL_DOMAIN ?? ''}`, `--email=${config.HOSTMGR_ACME_EMAIL ?? ''}`, `--node-major=${nodeMajor}`, '--no-ui'], { cwd: releaseRoot, inherit: true });
     console.log(`Strckro updated to ${manifest.version}.`);
   } finally {
     await rm(stage, { recursive: true, force: true });
