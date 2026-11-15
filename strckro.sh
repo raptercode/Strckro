@@ -9,14 +9,26 @@ umask 077
 DOMAIN=''
 EMAIL=''
 PORTAL_NODE_MAJOR=''
+NO_UI=false
+UI_PUBLIC=false
+UI_PORT='8787'
 for arg in "$@"; do
   case "$arg" in
     --domain=*) DOMAIN="${arg#*=}" ;;
     --email=*) EMAIL="${arg#*=}" ;;
     --node-major=*) PORTAL_NODE_MAJOR="${arg#*=}" ;;
-    *) echo 'Usage: sudo ./strckro.sh --domain=portal.example.com --email=admin@example.com [--node-major=20|22|24|26]' >&2; exit 64 ;;
+    --no-ui) NO_UI=true ;;
+    --ui-public) UI_PUBLIC=true ;;
+    --ui-port=*) UI_PORT="${arg#*=}" ;;
+    *) echo 'Usage: sudo ./strckro.sh [--domain=portal.example.com --email=admin@example.com] [--node-major=20|22|24|26] [--no-ui] [--ui-public] [--ui-port=8787]' >&2
+       echo 'Without --domain and --email a temporary Setup UI web page collects them (--no-ui requires both flags).' >&2
+       exit 64 ;;
   esac
 done
+[[ "$UI_PORT" =~ ^[0-9]{1,5}$ && "$UI_PORT" -ge 1 && "$UI_PORT" -le 65535 ]] || { echo 'ERROR: --ui-port must be a port number.' >&2; exit 64; }
+# The Setup UI is the default when neither --domain nor --email is given; --no-ui keeps the flags-only path.
+UI_MODE=false
+if [[ -z "$DOMAIN" && -z "$EMAIL" && "$NO_UI" != true ]]; then UI_MODE=true; fi
 
 APP_USER='dashboardportal'
 APP_ROOT='/opt/dashboard-portal'
@@ -187,6 +199,70 @@ trap 'rollback "$?"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Pinned Linux x64 and arm64 runtimes. Checksums come from the SHASUMS256.txt of each
+# release on nodejs.org; scripts/node-versions.mjs must name the same versions
+# (a test compares them). NODE_ARCH is x64 or arm64, chosen from dpkg above.
+node_pin() {
+  local sha_x64 sha_arm64
+  case "$1" in
+    20) NODE_PIN_VERSION='20.20.2'; sha_x64='df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d'; sha_arm64='73093db209e4e9e09dd7d15a47aeaab1b74833830df03efa5f942a1122c5fa71' ;;
+    22) NODE_PIN_VERSION='22.23.4'; sha_x64='1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce'; sha_arm64='6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b' ;;
+    24) NODE_PIN_VERSION="$NODE_VERSION"; sha_x64="$NODE_SHA256_X64"; sha_arm64="$NODE_SHA256_ARM64" ;;
+    26) NODE_PIN_VERSION='26.13.0'; sha_x64='d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997'; sha_arm64='406fe3fbde1c054adff8b297c16fdb5af6659db327c1ac8acd46b56ef1af9a92' ;;
+    *) die "Unsupported Node.js major: $1" ;;
+  esac
+  case "$NODE_ARCH" in
+    x64) NODE_PIN_SHA="$sha_x64" ;;
+    arm64) NODE_PIN_SHA="$sha_arm64" ;;
+    *) die "Unsupported Node.js architecture: $NODE_ARCH" ;;
+  esac
+}
+
+install_node_version() {
+  local major="$1" version sha archive target
+  node_pin "$major"
+  version="$NODE_PIN_VERSION"; sha="$NODE_PIN_SHA"
+  target="/opt/node-v${version}"
+  if [[ ! -x "$target/bin/node" ]]; then
+    archive="node-v${version}-linux-${NODE_ARCH}.tar.xz"
+    curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+      "https://nodejs.org/dist/v${version}/${archive}" -o "$TMP_DIR/$archive"
+    printf '%s  %s\n' "$sha" "$TMP_DIR/$archive" | sha256sum --check --status || die "Node.js ${version} archive checksum verification failed."
+    install -d -m 0755 "$target"
+    tar --extract --xz --file "$TMP_DIR/$archive" --directory "$target" --strip-components=1 --no-same-owner
+  fi
+  "$target/bin/node" --version | grep -qx "v${version}" || die "Node.js ${version} installation is incomplete."
+  [[ -x "$target/bin/npm" ]] || die "Node.js ${version} installation is missing npm."
+}
+# End of the Node.js pin helpers.
+
+step() { printf 'STRCKRO_STEP: %s\n' "$1"; }
+
+# Setup UI: provision only what the page itself needs (the pinned Node.js, plus the few packages that
+# unpacking it needs), then run scripts/setup-ui.mjs with it. The page starts THIS script again with
+# --no-ui for the real installation, so the maintenance lock is released first and nothing is changed
+# here that the installer's own rollback would have to know about.
+run_setup_ui() {
+  local ui_node ui_status=0 ui_args=() need=()
+  export DEBIAN_FRONTEND=noninteractive
+  command -v curl >/dev/null || need+=(curl)
+  [[ -e /etc/ssl/certs/ca-certificates.crt ]] || need+=(ca-certificates)
+  command -v xz >/dev/null || need+=(xz-utils)
+  if [[ "$PORTAL_NODE_MAJOR" == '26' || "$NODE_ARCH" == 'arm64' ]] && [[ -z "$(ldconfig -p 2>/dev/null | grep 'libatomic\.so\.1' || true)" ]]; then need+=(libatomic1); fi
+  if (( ${#need[@]} > 0 )); then
+    chmod 1777 /tmp
+    apt-get update
+    apt-get install -y --no-install-recommends "${need[@]}"
+  fi
+  install_node_version "$PORTAL_NODE_MAJOR"
+  ui_node="/opt/node-v${NODE_PIN_VERSION}/bin/node"
+  exec 9>&-
+  ui_args=("--port=$UI_PORT" "--default-node-major=$PORTAL_NODE_MAJOR")
+  if [[ "$UI_PUBLIC" == true ]]; then ui_args+=(--public); fi
+  "$ui_node" scripts/setup-ui.mjs "${ui_args[@]}" || ui_status=$?
+  exit "$ui_status"
+}
+
 [[ $EUID -eq 0 ]] || die 'Run with sudo.'
 if [[ -z "$PORTAL_NODE_MAJOR" ]]; then
   if [[ -f "$CONFIG_ROOT/dashboard-portal.env" ]]; then
@@ -203,9 +279,7 @@ if [[ -z "$PORTAL_NODE_MAJOR" ]]; then
   PORTAL_NODE_MAJOR="${PORTAL_NODE_MAJOR:-24}"
 fi
 [[ "$PORTAL_NODE_MAJOR" =~ ^(20|22|24|26)$ ]] || die 'Portal Node.js major must be 20, 22, 24 or 26.'
-[[ -n "$DOMAIN" && "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || die 'A lower-case FQDN is required in --domain.'
-[[ -n "$EMAIL" && "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die 'A valid --email is required. HTTPS is mandatory for a public login.'
-[[ -f package.json && -f package-lock.json && -d src && -d public && -f scripts/hostmgr-deploy-helper.mjs && -f scripts/sqlite.mjs && -f scripts/node-versions.mjs && -f scripts/maintenance-lock.mjs && -f scripts/worker-health.mjs && -f scripts/worker-activation.mjs && -f scripts/mail-host-config.mjs && -f scripts/maildir-store.mjs && -f scripts/nginx-edge.mjs && -f scripts/domain-dns.mjs && -f scripts/nginx-realip.mjs &&-f scripts/password-config.mjs && -f scripts/strckro-update.mjs && -f scripts/software-update.mjs && -f "$UPDATE_PUBLIC_KEY_SOURCE" ]] || die 'Run this script from an extracted Strckro release directory.'
+[[ -f package.json && -f package-lock.json && -d src && -d public && -f scripts/hostmgr-deploy-helper.mjs && -f scripts/sqlite.mjs && -f scripts/node-versions.mjs && -f scripts/maintenance-lock.mjs && -f scripts/worker-health.mjs && -f scripts/worker-activation.mjs && -f scripts/mail-host-config.mjs && -f scripts/maildir-store.mjs && -f scripts/nginx-edge.mjs && -f scripts/domain-dns.mjs && -f scripts/nginx-realip.mjs &&-f scripts/password-config.mjs && -f scripts/strckro-update.mjs && -f scripts/software-update.mjs && -f scripts/setup-ui.mjs && -f "$UPDATE_PUBLIC_KEY_SOURCE" ]] || die 'Run this script from an extracted Strckro release directory.'
 source /etc/os-release
 case "${ID:-}:${VERSION_ID:-}" in
   ubuntu:22.04|ubuntu:24.04|ubuntu:25.04|debian:12|debian:13) ;;
@@ -218,15 +292,27 @@ case "$(dpkg --print-architecture)" in
   *) die 'This release supports amd64 and arm64 only.' ;;
 esac
 
+# Settings: explicit --domain/--email (checked here), or the Setup UI (further down, once Node.js is provisioned).
+if [[ "$UI_MODE" != true ]]; then
+  [[ -n "$DOMAIN" && "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || die 'A lower-case FQDN is required in --domain.'
+  [[ -n "$EMAIL" && "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die 'A valid --email is required. HTTPS is mandatory for a public login.'
+fi
+
 # DNS must already exist before Certbot starts. This proves only name
 # resolution; firewall and inbound routing are checked by the ACME challenge.
-mapfile -t DNS_ADDRESSES < <(getent ahosts "$DOMAIN" | awk '{print $1}' | sort -u)
-(( ${#DNS_ADDRESSES[@]} > 0 )) || die "DNS for $DOMAIN does not resolve on this host. Create its A/AAAA record and wait for propagation."
-printf 'DNS preflight: %s resolves to %s\n' "$DOMAIN" "${DNS_ADDRESSES[*]}"
+# (The Setup UI checks DNS in its own form and the installer it starts repeats this check.)
+if [[ "$UI_MODE" != true ]]; then
+  mapfile -t DNS_ADDRESSES < <(getent ahosts "$DOMAIN" | awk '{print $1}' | sort -u)
+  (( ${#DNS_ADDRESSES[@]} > 0 )) || die "DNS for $DOMAIN does not resolve on this host. Create its A/AAAA record and wait for propagation."
+  printf 'DNS preflight: %s resolves to %s\n' "$DOMAIN" "${DNS_ADDRESSES[*]}"
+fi
 
 TMP_DIR="$(mktemp -d /tmp/dashboard-portal.XXXXXX)"
-BACKUP_DIR="${BACKUP_ROOT}/install-$(date -u +%Y%m%dT%H%M%SZ)"
-install -d -m 0700 -o root -g root "$BACKUP_DIR"
+# The Setup UI changes nothing to back up: the installer it starts makes its own snapshot.
+if [[ "$UI_MODE" != true ]]; then
+  BACKUP_DIR="${BACKUP_ROOT}/install-$(date -u +%Y%m%dT%H%M%SZ)"
+  install -d -m 0700 -o root -g root "$BACKUP_DIR"
+fi
 # Use a stable inode outside the helper RuntimeDirectory, which disappears when
 # that service stops. Existing participating operations hold shared leases.
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
@@ -249,6 +335,7 @@ chown "root:$APP_USER" "$MAINTENANCE_LOCK"
 chmod 0660 "$MAINTENANCE_LOCK"
 exec 9<>"$MAINTENANCE_LOCK"
 flock --exclusive --nonblock 9 || die 'Portal host operations are active; retry installation after they finish.'
+[[ "${UI_MODE:-false}" != true ]] || run_setup_ui
 if systemctl is-active --quiet dashboard-portal.service; then PREVIOUS_SERVICE_ACTIVE=true; fi
 if systemctl is-enabled --quiet dashboard-portal.service; then PREVIOUS_SERVICE_ENABLED=true; fi
 if systemctl is-active --quiet hostmgr-deploy-helper.service; then PREVIOUS_HELPER_ACTIVE=true; fi
@@ -292,6 +379,7 @@ chown root:root "$MAINTENANCE_TMPFILES"
 chmod 0644 "$MAINTENANCE_TMPFILES"
 systemd-tmpfiles --create "$MAINTENANCE_TMPFILES"
 
+step packages
 export DEBIAN_FRONTEND=noninteractive
 # apt drops signature verification to the unprivileged `_apt` user and needs a
 # conventional sticky temporary directory. Do not allow a restrictive umask or
@@ -307,41 +395,6 @@ fi
 # official arm64 Node.js builds; a minimal Debian image does not ship it.
 if [[ "$PORTAL_NODE_MAJOR" == '26' || "$NODE_ARCH" == 'arm64' ]] || compgen -G '/opt/node-v26.*' >/dev/null; then apt-get install -y --no-install-recommends libatomic1; fi
 
-# Pinned Linux x64 and arm64 runtimes. Checksums come from the SHASUMS256.txt of each
-# release on nodejs.org; scripts/node-versions.mjs must name the same versions
-# (a test compares them). NODE_ARCH is x64 or arm64, chosen from dpkg above.
-node_pin() {
-  local sha_x64 sha_arm64
-  case "$1" in
-    20) NODE_PIN_VERSION='20.20.2'; sha_x64='df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d'; sha_arm64='73093db209e4e9e09dd7d15a47aeaab1b74833830df03efa5f942a1122c5fa71' ;;
-    22) NODE_PIN_VERSION='22.23.4'; sha_x64='1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce'; sha_arm64='6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b' ;;
-    24) NODE_PIN_VERSION="$NODE_VERSION"; sha_x64="$NODE_SHA256_X64"; sha_arm64="$NODE_SHA256_ARM64" ;;
-    26) NODE_PIN_VERSION='26.13.0'; sha_x64='d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997'; sha_arm64='406fe3fbde1c054adff8b297c16fdb5af6659db327c1ac8acd46b56ef1af9a92' ;;
-    *) die "Unsupported Node.js major: $1" ;;
-  esac
-  case "$NODE_ARCH" in
-    x64) NODE_PIN_SHA="$sha_x64" ;;
-    arm64) NODE_PIN_SHA="$sha_arm64" ;;
-    *) die "Unsupported Node.js architecture: $NODE_ARCH" ;;
-  esac
-}
-
-install_node_version() {
-  local major="$1" version sha archive target
-  node_pin "$major"
-  version="$NODE_PIN_VERSION"; sha="$NODE_PIN_SHA"
-  target="/opt/node-v${version}"
-  if [[ ! -x "$target/bin/node" ]]; then
-    archive="node-v${version}-linux-${NODE_ARCH}.tar.xz"
-    curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-      "https://nodejs.org/dist/v${version}/${archive}" -o "$TMP_DIR/$archive"
-    printf '%s  %s\n' "$sha" "$TMP_DIR/$archive" | sha256sum --check --status || die "Node.js ${version} archive checksum verification failed."
-    install -d -m 0755 "$target"
-    tar --extract --xz --file "$TMP_DIR/$archive" --directory "$target" --strip-components=1 --no-same-owner
-  fi
-  "$target/bin/node" --version | grep -qx "v${version}" || die "Node.js ${version} installation is incomplete."
-  [[ -x "$target/bin/npm" ]] || die "Node.js ${version} installation is missing npm."
-}
 # A project service names /opt/node-v<version>, so a new pin would leave every project
 # on another major without a runtime until it was provisioned by hand. Only the
 # Portal's own major is required. Other majors already present on this host move to
@@ -427,6 +480,7 @@ prune_node_runtimes() {
   done
   return 0
 }
+step node
 provision_node_runtimes
 node_pin "$PORTAL_NODE_MAJOR"
 PORTAL_NODE="/opt/node-v${NODE_PIN_VERSION}/bin/node"
@@ -441,6 +495,7 @@ if [[ -x "$(dirname "$PORTAL_NODE")/corepack" ]]; then ln -sfn "$(dirname "$PORT
 [[ "$(/usr/local/bin/node --version)" == "$("$PORTAL_NODE" --version)" ]] || die 'Installed Node.js version did not match the selected runtime.'
 "/usr/local/bin/npm" --version >/dev/null || die 'Installed Node.js npm runtime could not be executed.'
 
+step bun
 # Bun is a project runtime, not a dependency of Strckro itself. Pin and verify the
 # baseline build on x64 (no AVX2 requirement) or the aarch64 build so projects can
 # safely select it after a fresh install or an ordinary Portal update.
@@ -457,6 +512,7 @@ fi
 ln -sfn "/opt/bun-v${BUN_VERSION}/bin/bun" /usr/local/bin/bun
 "/usr/local/bin/bun" --version | grep -qx "${BUN_VERSION}" || die 'Installed Bun version did not match the pinned release.'
 
+step files
 # Validate a staged release before replacing the live application files.
 STAGING_ROOT="$TMP_DIR/app"
 install -d -m 0755 "$STAGING_ROOT"
@@ -535,6 +591,7 @@ install -d -m 0750 -o root -g root "$PROJECT_CONFIG_DIR/projects"
 # ACME webroot.  Do not grant directory listing to unrelated local users.
 install -d -m 0711 -o root -g root /var/lib/hostmgr /srv/hostmgr /srv/hostmgr/projects
 install -d -m 0755 -o root -g root /var/lib/hostmgr/acme
+step services
 if [[ ! -f "$CONFIG_ROOT/dashboard-portal.env" ]]; then
   read -r -s -p 'Choose the Strckro owner password (at least 12 characters): ' ADMIN_PASSWORD; echo
   [[ ${#ADMIN_PASSWORD} -ge 12 ]] || die 'Password must be at least 12 characters.'
@@ -669,6 +726,7 @@ chown root:root "$NGINX_PROXY_SNIPPET"
 chmod 0600 "$NGINX_PROXY_SNIPPET"
 unset PROXY_TOKEN
 
+step nginx
 cat > "$NGINX_SITE" <<EOF
 server {
     listen 80;
@@ -812,7 +870,9 @@ done
 curl --fail --silent --show-error "http://127.0.0.1:${PORT}/api/health" >/dev/null || die 'Strckro did not pass its loopback health check.'
 systemctl reload nginx
 
+step tls
 certbot_with_lock_retry --nginx --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" --redirect --hsts
+step verify
 curl --fail --silent --show-error --max-time 15 "https://${DOMAIN}/api/health" >/dev/null || die 'HTTPS health check failed after certificate issuance.'
 
 # Only now, with the new release serving over HTTPS, is it safe to drop runtimes it replaced.

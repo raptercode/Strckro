@@ -9,8 +9,8 @@ const available = spawnSync(bash, ['--version']).status === 0;
 const strckro = (await readFile(new URL('../strckro.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 const bootstrap = (await readFile(new URL('../install.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 
-// The OS and architecture gate of strckro.sh: from the first `case` on ID:VERSION_ID up to the DNS preflight.
-const gate = strckro.slice(strckro.indexOf('case "${ID:-}:${VERSION_ID:-}" in'), strckro.indexOf('# DNS must already exist'));
+// The OS and architecture gate of strckro.sh: from the first `case` on ID:VERSION_ID up to the settings check that follows it.
+const gate = strckro.slice(strckro.indexOf('case "${ID:-}:${VERSION_ID:-}" in'), strckro.indexOf('# Settings: explicit --domain/--email'));
 // The same checks in the public bootstrap.
 const bootstrapGate = bootstrap.slice(bootstrap.indexOf('case "${ID:-}:${VERSION_ID:-}" in'), bootstrap.indexOf('for tool in curl tar'));
 

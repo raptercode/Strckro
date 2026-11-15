@@ -10,8 +10,9 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const available = spawnSync(bash, ['--version']).status === 0;
 const source = (await readFile(new URL('../strckro.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 const shellPath = (path) => path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
-const selection = source.slice(source.indexOf('if [[ -z "$PORTAL_NODE_MAJOR" ]]'), source.indexOf('[[ -n "$DOMAIN"'));
-const provision = source.slice(source.indexOf('node_pin()'), source.indexOf('# Bun is a project runtime'));
+const selection = source.slice(source.indexOf('if [[ -z "$PORTAL_NODE_MAJOR" ]]'), source.indexOf('[[ -f package.json'));
+// The pin helpers sit early (the Setup UI needs them); the rest of the provisioning follows the package install.
+const provision = 'step() { :; }' + String.fromCharCode(10) + source.slice(source.indexOf('node_pin()'), source.indexOf('# End of the Node.js pin helpers.')) + source.slice(source.indexOf('# A project service names'), source.indexOf('# Bun is a project runtime'));
 const exists = (path) => access(path).then(() => true, () => false);
 
 async function fakeRuntime(dir, version, { broken = false } = {}) {

@@ -10,8 +10,9 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const available = spawnSync(bash, ['--version']).status === 0;
 const source = (await readFile(new URL('../strckro.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 const shellPath = (path) => path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
-// Function definitions only: from node_pin() up to the line that first calls provision_node_runtimes.
-const definitions = source.slice(source.indexOf('node_pin()'), source.indexOf('\nprovision_node_runtimes\nnode_pin'));
+// Function definitions only: the pin helpers (defined early, for the Setup UI), then everything up to the line that first calls provision_node_runtimes.
+const pinHelpers = source.slice(source.indexOf('node_pin()'), source.indexOf('# End of the Node.js pin helpers.'));
+const definitions = 'step() { :; }' + String.fromCharCode(10) + pinHelpers + source.slice(source.indexOf('# A project service names'), source.indexOf('\nprovision_node_runtimes\nnode_pin'));
 const exists = (path) => access(path).then(() => true, () => false);
 
 // A runtime laid out exactly as the Node.js archive unpacks it.
