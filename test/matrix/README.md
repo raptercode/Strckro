@@ -68,3 +68,21 @@ Full matrix (Ubuntu 22.04/24.04/25.04, Debian 12/13 x amd64/arm64) with Node 24 
   arm64 as unverified until it runs on real arm64 hardware.
 - Occasional `qemu: uncaught target signal 11` inside `dpkg` (libc-bin) is an emulator crash, not an installer bug; rerun.
 - Fixed by this matrix: `nginx -t` failed on every arm64 case (32-byte `server_names_hash_bucket_size`).
+
+## Setup UI case (`UI=1`)
+
+```bash
+UI=1 test/matrix/run.sh ubuntu:24.04 amd64 24
+UI=1 test/matrix/run.sh debian:12 amd64 24
+```
+
+Runs `sudo bash ./strckro.sh --node-major=N </dev/null` with NO `--domain`/`--email` (stdin is not a terminal, as under
+`curl | bash`), so `strckro.sh` starts the Setup UI. `ui-case.sh` then plays the browser with `curl` inside the container:
+reads the token URL from the installer log, exchanges it for the cookie, checks auth (401 without cookie or with a wrong token,
+421 for a foreign Host, 403 for a POST without CSRF), the page, preflight and DNS endpoints, rejects invalid settings (422),
+POSTs `portal.matrix.test`, follows the SSE stream and polls the state until done, fetches the one-time installer password, and
+then runs the same `assert.sh` checks. It also asserts: the page listens on 127.0.0.1 only, runs before nginx is installed, the
+generated password is absent from the installer log, the SSE capture, the journal and the disk, is the one stored (base64) in
+the env file, is not delivered twice, the setup server exits after "finish", and finally uses the password against the real
+portal (`/api/bootstrap` with a wrong password gives 401, with the generated one creates the owner, then `/api/login` works).
+Logs go to `logs/<os>-<arch>-n<N>-ui.log`. A real browser is not involved; page rendering is not covered.

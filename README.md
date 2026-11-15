@@ -31,7 +31,7 @@ Use an interactive SSH session on an Ubuntu 22.04, 24.04 or 25.04, or Debian 12 
 curl -fsSL https://dashboard-portal.cloud/install.sh | bash
 ```
 
-The installer prompts for your domain and a reachable TLS email. It installs the latest stable release and defaults to Node.js 24. The guide covers pinning a release, backups, and updates. [Production installation](docs/en/how-to/production-install.md)
+With no `--domain`/`--email`, the installer starts a temporary **Setup UI** web page that collects your domain and a reachable TLS email, runs the install with live progress and shows a one-time installer password at the end. It listens on `127.0.0.1` only and prints an `ssh -L` command plus a token URL; add `--no-ui` for terminal prompts, `--ui-public` to listen on all interfaces over plain HTTP, `--ui-port=N` to change port 8787. It installs the latest stable release and defaults to Node.js 24. The guide covers the Setup UI's security model, pinning a release, backups, and updates. [Production installation](docs/en/how-to/production-install.md)
 
 ## Try the dashboard locally
 
