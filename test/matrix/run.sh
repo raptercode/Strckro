@@ -3,7 +3,8 @@
 # Usage: test/matrix/run.sh <os> <arch> <node-major>
 #   os: ubuntu:22.04 | ubuntu:24.04 | ubuntu:25.04 | debian:12 | debian:13   (any docker image with apt)
 #   arch: amd64 | arm64 (arm64 needs QEMU/binfmt; skipped with exit 2 when unavailable)
-# Env: KEEP=1 keep the container; REBUILD=1 rebuild image; SOURCE=worktree|head (default worktree);
+# Env: UI=1 run the installer WITHOUT --domain/--email and drive the Setup UI with curl (ui-case.sh);
+#      KEEP=1 keep the container; REBUILD=1 rebuild image; SOURCE=worktree|head (default worktree);
 #      DOMAIN (default portal.matrix.test).
 # Exit: 0 PASS, 1 FAIL, 2 SKIP (arch unavailable), 3 GATE (installer refuses this OS by design).
 # Everything created is named strckro-matrix-*. Other Docker objects are never touched.
@@ -12,13 +13,14 @@ os=${1:?usage: run.sh <os> <arch> <node-major>}; arch=${2:?arch}; node_major=${3
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); repo=$(cd "$here/../.." && pwd)
 DOMAIN=${DOMAIN:-portal.matrix.test}; EMAIL=${EMAIL:-admin@matrix.test}; SOURCE=${SOURCE:-worktree}
 slug=${os//[:\/]/-}; tag="$slug-$arch"; image="strckro-matrix-$tag"
-name="strckro-matrix-$tag-n$node_major-$$"
-logdir=$here/logs; mkdir -p "$logdir"; log="$logdir/$tag-n$node_major.log"; : > "$log"
+ui=''; [[ ${UI:-0} == 1 ]] && ui='-ui'   # UI=1: drive the Setup UI instead of passing --domain/--email (see ui-case.sh)
+name="strckro-matrix-$tag-n$node_major$ui-$$"
+logdir=$here/logs; mkdir -p "$logdir"; log="$logdir/$tag-n$node_major$ui.log"; : > "$log"
 export MSYS_NO_PATHCONV=1   # Git Bash on Windows must not rewrite /paths passed to docker
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$log"; }
 wp(){ if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf "%s" "$1"; fi; }
 dx(){ docker exec "$name" "$@"; }
-finish(){ local rc=$1 status=$2; echo "$status" > "$logdir/$tag-n$node_major.result"; say "RESULT $status"; exit "$rc"; }
+finish(){ local rc=$1 status=$2; echo "$status" > "$logdir/$tag-n$node_major$ui.result"; say "RESULT $status"; exit "$rc"; }
 cleanup(){ [[ "${KEEP:-0}" == 1 ]] || docker rm -f -v "$name" >/dev/null 2>&1; rm -f "${tarball:-/nonexistent}"; }
 trap cleanup EXIT
 
@@ -65,6 +67,8 @@ dx bash -c '! command -v node' >/dev/null 2>&1 || say 'WARN: node already presen
 install_cmd="cd /root/release && printf '%s\n' 'Matrix-Test-Pass-12345' | sudo bash ./strckro.sh --domain=$DOMAIN --email=$EMAIL --node-major=$node_major"
 fail=0
 t(){ if [[ $2 == ok ]]; then say "PASS $1"; else say "FAIL $1"; fail=1; fi; }
+
+if [[ ${UI:-0} == 1 ]]; then source "$here/ui-case.sh"; fi
 
 # --- negative: unsupported OS gate (fake /etc/os-release) and bad domain ---
 dx bash -c 'cp -a /etc/os-release /root/os-release.bak; rm -f /etc/os-release; printf "ID=alpine\nVERSION_ID=3.20\n" > /etc/os-release'
