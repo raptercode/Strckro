@@ -114,11 +114,21 @@ certbot_with_lock_retry() {
 }
 
 set_config_value() {
-  local key="$1" value="$2" file="$3"
-  if grep -q "^${key}=" "$file"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
-  else
-    printf '%s=%s\n' "$key" "$value" >> "$file"
+  local key="$1" value="$2" file="$3" updated
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die 'Invalid config entry.'
+  updated="$(mktemp -- "$file.XXXXXX")"
+  # ENVIRON passes the value literally, including characters special to awk or sed.
+  if ! STRCKRO_CONFIG_KEY="$key" STRCKRO_CONFIG_VALUE="$value" awk '
+    BEGIN { prefix = ENVIRON["STRCKRO_CONFIG_KEY"] "="; entry = prefix ENVIRON["STRCKRO_CONFIG_VALUE"] }
+    index($0, prefix) == 1 { print entry; found = 1; next }
+    { print }
+    END { if (!found) print entry }
+  ' "$file" > "$updated" ||
+    ! chown --reference="$file" -- "$updated" ||
+    ! chmod --reference="$file" -- "$updated" ||
+    ! mv -fT -- "$updated" "$file"; then
+    rm -f -- "$updated"
+    die "Could not write config entry $key."
   fi
 }
 

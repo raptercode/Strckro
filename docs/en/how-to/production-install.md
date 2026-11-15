@@ -23,7 +23,7 @@ Without `--version`, the command selects GitHub's latest published stable releas
 curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --version v1.1.0
 ```
 
-`bash -s` reads the script from the pipe; `--` separates arguments passed to the installer. Use the published tag format `v<major>.<minor>.<patch>`, such as `v1.1.0`, including the `v` prefix. The release must have its archive and checksum published. Missing releases/download failures stop installation rather than falling back to latest. Check available versions in [GitHub Releases](https://github.com/raptercode/Strckro/releases).
+`bash -s` reads the script from the pipe; `--` separates arguments passed to the installer. Use the published tag format `v<major>.<minor>.<patch>`, such as `v1.1.0`, including the `v` prefix. The release must have its archive and signed `stable.json` manifest published. Missing releases/download failures stop installation rather than falling back to latest. Check available versions in [GitHub Releases](https://github.com/raptercode/Strckro/releases).
 
 ### Setup UI (default)
 
@@ -55,7 +55,7 @@ With `--no-ui`, or when you pass `--domain` and `--email`, use an interactive SS
 
 TLS email cannot be blank. It is separate from the login email configured during first-account setup in the browser. You do not need to install a mail server to supply it. Prompts read `/dev/tty`, including sudo and initial password setup, so the curl pipe works. The standard command uses Node 24.
 
-The bootstrap downloads the release archive and its SHA-256 file over HTTPS, verifies the requested archive, extracts it into a private temporary directory and invokes the host installer. Failed downloads/checksums stop installation. Initial bootstrap trusts the HTTPS/GitHub release source; subsequent signed updates also verify Ed25519.
+The bootstrap requires Python 3 and OpenSSL 3. It downloads `stable.json` from the selected release and verifies its Ed25519 signature with the public key embedded in `install.sh`. It checks that the manifest identifies the selected stable release and uses the signed SHA-256 to verify the archive before extracting it or invoking the host installer. Missing or invalid manifests stop installation. Obtain the bootstrap itself from a source you trust.
 
 The installer provisions the selected pinned Portal Node runtime, Bun, Git, Nginx and Certbot. It does not install unused Node majors or remove existing project runtimes; prepare additional project runtimes separately and check Setup/Doctor before deployment. It runs the Portal at `127.0.0.1:3100`, requires TLS, enables HTTPS redirects/HSTS and verifies HTTPS health. Choose an initial password of at least 12 characters and finish account bootstrap in the browser.
 

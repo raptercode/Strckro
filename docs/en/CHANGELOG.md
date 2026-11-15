@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1 — 2026-11-16
+
+- Write the installer configuration as literal data, including TLS email addresses with punctuation. Reject multiline values and preserve file ownership and permissions when replacing the configuration.
+- Verify the Ed25519 signature of the selected release manifest with the bundled public key and check the archive against the signed SHA-256 before extracting or running it. The bootstrap requires Python 3 and OpenSSL 3.
+
 ## 1.2.0 — 2026-11-15
 
 - Install on more systems with the same command. The installer now supports Ubuntu 22.04, 24.04 and 25.04 and Debian 12 and 13, on amd64 and arm64. It checks the OS and CPU before changing anything, picks the matching Node.js and Bun builds with per-architecture checksums, installs `libatomic1` on arm64, and falls back to a catch-all TLS server block on Nginx older than 1.19.4 (`ssl_reject_handshake` is still used on 1.19.4 and newer).

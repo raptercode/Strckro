@@ -12,18 +12,18 @@ const bootstrap = (await readFile(new URL('../install.sh', import.meta.url), 'ut
 // The OS and architecture gate of strckro.sh: from the first `case` on ID:VERSION_ID up to the settings check that follows it.
 const gate = strckro.slice(strckro.indexOf('case "${ID:-}:${VERSION_ID:-}" in'), strckro.indexOf('# Settings: explicit --domain/--email'));
 // The same checks in the public bootstrap.
-const bootstrapGate = bootstrap.slice(bootstrap.indexOf('case "${ID:-}:${VERSION_ID:-}" in'), bootstrap.indexOf('for tool in curl tar'));
+const bootstrapGate = bootstrap.slice(bootstrap.indexOf('case "$OS_RELEASE" in'), bootstrap.indexOf('if (( EUID != 0 )); then'));
 
 const SUPPORTED = [['ubuntu', '22.04'], ['ubuntu', '24.04'], ['ubuntu', '25.04'], ['debian', '12'], ['debian', '13']];
 const REJECTED = [['ubuntu', '20.04'], ['ubuntu', '23.10'], ['ubuntu', '26.04'], ['debian', '11'], ['debian', '14'], ['debian', ''], ['fedora', '40'], ['', '']];
 
-function runGate(id, version, { dpkg = 'amd64', uname = 'x86_64', script = gate } = {}) {
+function runGate(id, version, { dpkg = 'amd64', script = gate } = {}) {
   const input = [
     'set -euo pipefail',
     'die() { echo "$*" >&2; exit 1; }',
-    `ID='${id}'; VERSION_ID='${version}'`,
+    `ID='${id}'; VERSION_ID='${version}'; OS_RELEASE='${id}:${version}'`,
     `dpkg() { echo '${dpkg}'; }`,
-    `uname() { echo '${uname}'; }`,
+
     "BUN_SHA256_X64='x64sum'; BUN_SHA256_ARM64='arm64sum'",
     script,
     'echo "ARCH=${NODE_ARCH:-} BUN=${BUN_ARCHIVE_NAME:-} SHA=${BUN_SHA256:-}"'
@@ -57,16 +57,16 @@ test('installer refuses other distributions, releases and CPU architectures with
 
 test('the public bootstrap gate accepts exactly the same hosts as the installer', { skip: !available }, () => {
   for (const [id, version] of SUPPORTED) {
-    for (const uname of ['x86_64', 'aarch64']) {
-      const result = runGate(id, version, { uname, script: bootstrapGate });
-      assert.equal(result.status, 0, `${id} ${version} ${uname}: ${result.stderr}`);
+    for (const dpkg of ['amd64', 'arm64']) {
+      const result = runGate(id, version, { dpkg, script: bootstrapGate });
+      assert.equal(result.status, 0, `${id} ${version} ${dpkg}: ${result.stderr}`);
     }
   }
   for (const [id, version] of REJECTED) assert.notEqual(runGate(id, version, { script: bootstrapGate }).status, 0, `${id} ${version} must be refused`);
-  for (const uname of ['armv7l', 'i686', 'riscv64']) {
-    const result = runGate('ubuntu', '24.04', { uname, script: bootstrapGate });
+  for (const dpkg of ['armhf', 'i386', 'riscv64']) {
+    const result = runGate('ubuntu', '24.04', { dpkg, script: bootstrapGate });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /amd64 and arm64 only/);
+    assert.match(result.stderr, /amd64 or arm64 is required/);
   }
 });
 

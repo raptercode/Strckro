@@ -34,7 +34,7 @@ curl -fsSL https://dashboard-portal.cloud/install.sh | bash
 curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --version v1.1.0
 ```
 
-`bash -s` ให้อ่าน script จาก pipe และ `--` แยก arguments ที่ส่งให้ installer ระบุ tag แบบ `v<major>.<minor>.<patch>` เช่น `v1.1.0` ไม่ใช่ `0.8.3` เลือกเฉพาะ release ที่มี archive และ checksum เผยแพร่แล้ว หากไม่พบเวอร์ชันหรือดาวน์โหลดไม่ได้จะหยุด ไม่เปลี่ยนไปใช้ latest แทน ดูรุ่นที่มีใน [GitHub Releases](https://github.com/raptercode/Strckro/releases)
+`bash -s` ให้อ่าน script จาก pipe และ `--` แยก arguments ที่ส่งให้ installer ระบุ tag แบบ `v<major>.<minor>.<patch>` เช่น `v1.1.0` ไม่ใช่ `0.8.3` เลือกเฉพาะ release ที่มี archive และ signed manifest `stable.json` เผยแพร่แล้ว หากไม่พบเวอร์ชันหรือดาวน์โหลดไม่ได้จะหยุด ไม่เปลี่ยนไปใช้ latest แทน ดูรุ่นที่มีใน [GitHub Releases](https://github.com/raptercode/Strckro/releases)
 
 ### Setup UI (ค่าเริ่มต้น)
 
@@ -66,7 +66,7 @@ curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --version v1.1
 
 ปล่อย TLS email ว่างไม่ได้ อีเมลนี้แยกจากอีเมลบัญชี login ซึ่งตั้งตอนสร้างบัญชีแรกในเว็บ ไม่ต้องติดตั้ง mail server เพื่อใช้อีเมลนี้ คำสั่งปกติใช้ Node 24 สำหรับ Portal ระบบอ่าน prompts ผ่าน `/dev/tty` จึงทำงานได้แม้ stdin เป็น pipe ไม่ต้องดาวน์โหลดหรือแตก release เอง
 
-Bootstrap ดาวน์โหลด archive และ checksum ของ release จาก GitHub ผ่าน HTTPS ตรวจ SHA-256 แล้วเรียก installer จาก directory ชั่วคราว หยุดเมื่อดาวน์โหลดหรือ checksum ไม่ผ่าน การตรวจ checksum ของ bootstrap อาศัยความเชื่อถือใน HTTPS/GitHub; signed updater หลังติดตั้งตรวจ Ed25519 เพิ่มด้วย
+Bootstrap ต้องใช้ Python 3 และ OpenSSL 3 โดยดาวน์โหลด `stable.json` จาก release ที่เลือกและตรวจลายเซ็น Ed25519 ด้วย public key ที่ฝังใน `install.sh` จากนั้นตรวจว่า manifest ตรงกับ release ที่เลือก และใช้ SHA-256 ที่ลงลายเซ็นไว้ตรวจ archive ก่อนแตกไฟล์หรือรัน installer หากไม่มี manifest หรือตรวจไม่ผ่านจะหยุด ควรรับ bootstrap จากแหล่งที่เชื่อถือได้
 
 Installer เตรียม Node major ที่เลือกพร้อมตรวจ checksum โดยไม่ติดตั้ง major ที่ไม่ได้ใช้ Runtime ของ project ที่มีอยู่ยังคงไว้ ตรวจเครื่องมือที่พร้อมจริงอีกครั้งใน Setup/Doctor และอ่าน [Node versions](node-versions.md) สำหรับ runtime และ nvm
 

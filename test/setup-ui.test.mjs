@@ -362,9 +362,10 @@ test('strckro.sh and install.sh wire up the Setup UI flags without breaking the 
   for (const flag of ['--no-ui', '--ui-public', '--ui-port=*']) assert.ok(strckro.includes(flag), `strckro.sh handles ${flag}`);
   for (const flag of ['--no-ui', '--ui-public', '--ui-port', '--domain=*', '--email=*']) assert.ok(bootstrap.includes(flag), `install.sh handles ${flag}`);
   assert.match(strckro, /if \[\[ -z "\$DOMAIN" && -z "\$EMAIL" && "\$NO_UI" != true \]\]; then UI_MODE=true; fi/);
-  assert.match(bootstrap, /if \[\[ "\$NO_UI" == true \|\| -n "\$DOMAIN" \|\| -n "\$EMAIL" \]\]; then UI=false; fi/);
-  assert.match(bootstrap, /--no-ui <&3/, 'the terminal path still reads from the terminal and tells the installer not to start the UI');
-  assert.match(bootstrap, /"\$\{INSTALLER_ARGS\[@\]\}" <\/dev\/null/, 'the UI path never reads the curl | bash script from stdin');
+  assert.match(bootstrap, /"\$NO_UI" == false && -z "\$DOMAIN" && -z "\$EMAIL"/);
+  assert.match(bootstrap, /INSTALLER\+=\(--no-ui\)/);
+  assert.match(bootstrap, /exec 3<>\/dev\/tty/);
+  assert.match(bootstrap, /exec 3<\/dev\/null/, 'the UI path never reads the curl | bash script from stdin');
   const marks = [...strckro.matchAll(/^step ([a-z]+)$/gm)].map((m) => m[1]);
   assert.deepEqual(marks, STEP_IDS, 'strckro.sh marks every phase the page lists, in order');
   // OS/arch gates and the maintenance lock come before the UI starts; Node is provisioned by the existing helper.
