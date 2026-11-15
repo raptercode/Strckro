@@ -305,7 +305,7 @@ export function createSetupServer(options = {}) {
         state.phase = 'success';
         emit('phase', { phase: 'success' });
         if (password && process.stdout.isTTY && options.printPassword !== false) {
-          process.stdout.write(`\nInstalled. Initial owner password (shown once, save it now): ${password}\n`);
+          process.stdout.write(`\nInstalled. Installer password (shown once, save it now; enter it when you first open the portal): ${password}\n`);
         }
         graceTimer = setTimeout(() => shutdown(0), Math.max(graceMs, 1000) * 5);
         graceTimer.unref?.();
@@ -623,7 +623,7 @@ var I18N = {
  en: {
   skip:'Skip to content', setup:'Setup',
   s_welcome:'Check', s_settings:'Settings', s_review:'Review', s_install:'Install', s_done:'Done',
-  w_title:'Welcome to the Strckro installer', w_lead:'This temporary page sets up Strckro on this server. It closes when the installation ends. Nothing here asks for a password: a strong one is generated for you and shown once at the end.',
+  w_title:'Welcome to the Strckro installer', w_lead:'This temporary page sets up Strckro on this server. It closes when the installation ends. It never asks you to type a password: a strong installer password is generated and shown once at the end.',
   w_checking:'Checking this server...', w_recheck:'Check again', w_next:'Continue', w_blocked:'Fix the failed checks, then check again.',
   st_pass:'OK', st_warn:'Warning', st_fail:'Failed',
   c_os:'Operating system', c_arch:'CPU architecture', c_root:'Running as root', c_ram:'Memory', c_disk:'Free disk space',
@@ -635,12 +635,12 @@ var I18N = {
   d_checking:'Checking DNS...', d_none:'This name does not resolve yet. Create its A/AAAA record first; the installer stops if it cannot resolve it.',
   d_match:'Resolves to this server: ', d_other:'Resolves to: ', d_mismatch:' (this server’s own public addresses: ', d_nomatch:'does not match an address on this server; fine behind NAT or a proxy)', d_offline:'DNS check unavailable.', d_server:'This server’s public address: ',
   v_domain:'Enter a lower-case fully qualified domain.', v_email:'Enter a valid email address.',
-  r_title:'Review', r_lead:'The installer will install Nginx, Certbot, the pinned Node.js and Bun runtimes and Strckro, then request a TLS certificate. If any step fails it restores the Strckro files it changed.', r_pw:'Owner password', r_pw_new:'Generated for you; shown once at the end', r_pw_existing:'Unchanged (existing installation)', r_start:'Start installation',
+  r_title:'Review', r_lead:'The installer will install Nginx, Certbot, the pinned Node.js and Bun runtimes and Strckro, then request a TLS certificate. If any step fails it restores the Strckro files it changed.', r_pw:'Installer password', r_pw_new:'Generated for you; shown once at the end', r_pw_existing:'Unchanged (existing installation)', r_start:'Start installation',
   i_title:'Installing', i_wait:'Please keep this page open. This usually takes a few minutes.', i_running:'Installation in progress...', i_log:'Installer output',
   p_packages:'Packages', p_node:'Node.js', p_bun:'Bun', p_files:'Application files', p_services:'Services', p_nginx:'Nginx', p_tls:'TLS certificate', p_verify:'HTTPS check',
   f_title:'Installation failed', f_line:'Failing line: ', f_rolled:'The installer rolled back the Strckro files it had changed. Installed packages and an already issued certificate are not removed.', f_norb:'It stopped before changing any Strckro files.', f_retry:'Retry', f_hint:'Fix the cause shown above, then retry. This page stays open for a while.',
-  o_title:'Strckro is installed', o_open:'Open your portal', o_pw:'Initial owner password', o_copy:'Copy', o_copied:'Copied', o_once:'This is shown once and never stored. Save it in a password manager now, then sign in and change it.', o_gone:'The password was already shown. If you lost it, run: sudo strckro --reset-pwd', o_existing:'Your existing owner password is unchanged.',
-  o_next:'Next steps', o_n1:'Open the portal and sign in as the owner.', o_n2:'Command line help on the server:', o_n3:'Reset the owner password any time:', o_close:'Close this page', o_closed:'You can close this page; the installer has stopped.',
+  o_title:'Strckro is installed', o_open:'Open your portal', o_pw:'Installer password', o_copy:'Copy', o_copied:'Copied', o_once:'Shown once and never stored by this page. Save it now: you enter it when you first open the portal, to create the owner account with your own email and password.', o_gone:'The installer password was already shown. If you lost it and no owner exists yet, run: sudo strckro --reset-pwd', o_existing:'Your existing installer and owner passwords are unchanged.',
+  o_next:'Next steps', o_n1:'Open the portal, enter the installer password above and create the owner account.', o_n2:'Command line help on the server:', o_n3:'Generate a new administrator password later:', o_close:'Close this page', o_closed:'You can close this page; the installer has stopped.',
   err_generic:'Something went wrong.', err_session:'The session expired. Reopen the URL with the token from the terminal.'
  },
  th: {
@@ -658,12 +658,12 @@ var I18N = {
   d_checking:'กำลังตรวจสอบ DNS...', d_none:'ชื่อนี้ยังไม่ resolve กรุณาสร้างเรคคอร์ด A/AAAA ก่อน ตัวติดตั้งจะหยุดหากไม่สามารถ resolve ได้',
   d_match:'ชี้มาที่เซิร์ฟเวอร์นี้: ', d_other:'resolve เป็น: ', d_mismatch:' (ที่อยู่สาธารณะของเซิร์ฟเวอร์นี้: ', d_nomatch:'ไม่ตรงกับที่อยู่บนเซิร์ฟเวอร์นี้ ซึ่งปกติเมื่ออยู่หลัง NAT หรือพร็อกซี)', d_offline:'ไม่สามารถตรวจสอบ DNS ได้', d_server:'ที่อยู่สาธารณะของเซิร์ฟเวอร์นี้: ',
   v_domain:'กรอกโดเมนเต็มตัวพิมพ์เล็ก', v_email:'กรอกอีเมลให้ถูกต้อง',
-  r_title:'ทบทวน', r_lead:'ตัวติดตั้งจะติดตั้ง Nginx, Certbot, Node.js และ Bun ตามเวอร์ชันที่กำหนด และ Strckro แล้วขอใบรับรอง TLS หากขั้นตอนใดล้มเหลวจะย้อนไฟล์ Strckro ที่แก้ไขกลับ', r_pw:'รหัสผ่านเจ้าของระบบ', r_pw_new:'สร้างให้อัตโนมัติ แสดงครั้งเดียวตอนท้าย', r_pw_existing:'ไม่เปลี่ยนแปลง (มีการติดตั้งอยู่แล้ว)', r_start:'เริ่มติดตั้ง',
+  r_title:'ทบทวน', r_lead:'ตัวติดตั้งจะติดตั้ง Nginx, Certbot, Node.js และ Bun ตามเวอร์ชันที่กำหนด และ Strckro แล้วขอใบรับรอง TLS หากขั้นตอนใดล้มเหลวจะย้อนไฟล์ Strckro ที่แก้ไขกลับ', r_pw:'รหัสผ่านตัวติดตั้ง', r_pw_new:'สร้างให้อัตโนมัติ แสดงครั้งเดียวตอนท้าย', r_pw_existing:'ไม่เปลี่ยนแปลง (มีการติดตั้งอยู่แล้ว)', r_start:'เริ่มติดตั้ง',
   i_title:'กำลังติดตั้ง', i_wait:'กรุณาเปิดหน้านี้ไว้ ปกติใช้เวลาไม่กี่นาที', i_running:'กำลังติดตั้ง...', i_log:'ผลลัพธ์จากตัวติดตั้ง',
   p_packages:'แพ็กเกจ', p_node:'Node.js', p_bun:'Bun', p_files:'ไฟล์แอปพลิเคชัน', p_services:'เซอร์วิส', p_nginx:'Nginx', p_tls:'ใบรับรอง TLS', p_verify:'ตรวจสอบ HTTPS',
   f_title:'การติดตั้งล้มเหลว', f_line:'บรรทัดที่ล้มเหลว: ', f_rolled:'ตัวติดตั้งย้อนไฟล์ Strckro ที่แก้ไขกลับแล้ว แพ็กเกจที่ติดตั้งและใบรับรองที่ออกไปแล้วจะไม่ถูกลบ', f_norb:'หยุดก่อนแก้ไขไฟล์ Strckro ใด ๆ', f_retry:'ลองใหม่', f_hint:'แก้สาเหตุที่แสดงด้านบนแล้วลองใหม่ หน้านี้จะเปิดค้างไว้สักพัก',
-  o_title:'ติดตั้ง Strckro เรียบร้อยแล้ว', o_open:'เปิดพอร์ทัลของคุณ', o_pw:'รหัสผ่านเจ้าของระบบเริ่มต้น', o_copy:'คัดลอก', o_copied:'คัดลอกแล้ว', o_once:'แสดงเพียงครั้งเดียวและไม่ถูกเก็บไว้ บันทึกลงตัวจัดการรหัสผ่านทันที แล้วเข้าสู่ระบบและเปลี่ยนรหัสผ่าน', o_gone:'รหัสผ่านถูกแสดงไปแล้ว หากทำหาย ให้รัน: sudo strckro --reset-pwd', o_existing:'รหัสผ่านเจ้าของระบบเดิมไม่เปลี่ยนแปลง',
-  o_next:'ขั้นตอนถัดไป', o_n1:'เปิดพอร์ทัลและเข้าสู่ระบบในฐานะเจ้าของ', o_n2:'วิธีใช้คำสั่งบนเซิร์ฟเวอร์:', o_n3:'รีเซ็ตรหัสผ่านเจ้าของระบบได้ทุกเมื่อ:', o_close:'ปิดหน้านี้', o_closed:'ปิดหน้านี้ได้ ตัวติดตั้งหยุดทำงานแล้ว',
+  o_title:'ติดตั้ง Strckro เรียบร้อยแล้ว', o_open:'เปิดพอร์ทัลของคุณ', o_pw:'รหัสผ่านตัวติดตั้ง', o_copy:'คัดลอก', o_copied:'คัดลอกแล้ว', o_once:'แสดงเพียงครั้งเดียวและหน้านี้ไม่เก็บไว้ บันทึกไว้ทันที เพราะต้องกรอกเมื่อเปิดพอร์ทัลครั้งแรกเพื่อสร้างบัญชีเจ้าของด้วยอีเมลและรหัสผ่านของคุณเอง', o_gone:'แสดงรหัสผ่านตัวติดตั้งไปแล้ว หากทำหายและยังไม่มีบัญชีเจ้าของ ให้รัน: sudo strckro --reset-pwd', o_existing:'รหัสผ่านตัวติดตั้งและรหัสผ่านเจ้าของเดิมไม่เปลี่ยนแปลง',
+  o_next:'ขั้นตอนถัดไป', o_n1:'เปิดพอร์ทัล กรอกรหัสผ่านตัวติดตั้งด้านบน และสร้างบัญชีเจ้าของ', o_n2:'วิธีใช้คำสั่งบนเซิร์ฟเวอร์:', o_n3:'สร้างรหัสผ่านผู้ดูแลใหม่ภายหลัง:', o_close:'ปิดหน้านี้', o_closed:'ปิดหน้านี้ได้ ตัวติดตั้งหยุดทำงานแล้ว',
   err_generic:'เกิดข้อผิดพลาด', err_session:'เซสชันหมดอายุ กรุณาเปิด URL พร้อมโทเค็นจากเทอร์มินัลอีกครั้ง'
  }
 };
