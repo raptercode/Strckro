@@ -86,3 +86,17 @@ generated password is absent from the installer log, the SSE capture, the journa
 the env file, is not delivered twice, the setup server exits after "finish", and finally uses the password against the real
 portal (`/api/bootstrap` with a wrong password gives 401, with the generated one creates the owner, then `/api/login` works).
 Logs go to `logs/<os>-<arch>-n<N>-ui.log`. A real browser is not involved; page rendering is not covered.
+
+## Upgrade case (1.1.5 -> current worktree)
+
+```bash
+test/matrix/upgrade-case.sh ubuntu:24.04 amd64 24     # other OS/arch: SKIP (exit 2), the 1.1.5 installer only supports Ubuntu 24.04 amd64
+```
+
+Installs the release commit `b9f8c1e` (`git archive`, package.json 1.1.5) with its own `strckro.sh`, bootstraps the owner through
+`/api/bootstrap`, records state (hash of the `HOSTMGR_SECRET_KEY` line, env perms, sqlite, node/bun, nginx site hash), then runs the
+NEW `strckro.sh` the way `strckro update` does (`--domain/--email/--node-major` read from the env file, `--no-ui`, no stdin) and checks:
+services, `nginx -t`, health, replaced files, secret unchanged, owner login with the same credentials, perms, pins, hash-bucket
+directive, catch-all behaviour, no Setup UI/port 8787, idempotent second run, `/etc/hostmgr` 0711 with the mail marker, a blank
+`HOSTMGR_ACME_EMAIL` failing fast with the clear error while the host keeps serving, and `strckro -v` / `update --check`.
+Not covered: the signed download path of `strckro update` itself, real ACME. Log: `logs/<os>-<arch>-n<N>-upgrade.log`.
