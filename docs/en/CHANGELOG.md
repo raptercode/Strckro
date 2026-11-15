@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0 — 2026-11-15
+
+- Install on more systems with the same command. The installer now supports Ubuntu 22.04, 24.04 and 25.04 and Debian 12 and 13, on amd64 and arm64. It checks the OS and CPU before changing anything, picks the matching Node.js and Bun builds with per-architecture checksums, installs `libatomic1` on arm64, and falls back to a catch-all TLS server block on Nginx older than 1.19.4 (`ssl_reject_handshake` is still used on 1.19.4 and newer).
+- Set `server_names_hash_bucket_size 64` in Strckro's Nginx limits file so `nginx -t` passes on arm64 hosts. If the host already sets it, Strckro drops its own value with a warning instead of failing the install.
+- Setup UI. When you run the installer without `--domain` and `--email` (for example `curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --node-major=24`), it starts a temporary web page that asks for the domain and a reachable TLS email, shows live installation progress and prints a one-time installer password at the end. It listens on `127.0.0.1` only and prints an `ssh -L` command and a token URL; the token, cookie and CSRF protections are described in the production installation guide. Add `--no-ui` for the earlier terminal prompts, `--ui-public` to listen on all interfaces over plain HTTP, or `--ui-port=N` to change port 8787. **This is the new default for an install with no domain and email.** Scripts that relied on terminal prompts must pass `--no-ui`.
+- `sudo strckro update` never opens the Setup UI. It passes `--no-ui` and the saved domain, email and Node.js major to the installer.
+- Retry `certbot` for about 30 seconds when another Certbot run holds its lock, and let Dovecot traverse the project configuration directory once the mail service is installed.
+- Node.js 24 stays the default major version. 20, 22 and 26 can be chosen with `--node-major`.
+- New Docker test matrix under `test/matrix` that installs on each OS and architecture in systemd containers, drives the Setup UI end to end and upgrades a real 1.1.5 host.
+- Tested: on Node.js 24 and 26, 19 of 20 OS and architecture combinations pass; the 1.1.5 → 1.2.0 upgrade passes on Ubuntu 24.04 amd64. **Not verified: Debian 13 on arm64.** It failed in the emulated test (systemd `226/NAMESPACE`) and has not been tried on real arm64 hardware. Other arm64 results come from QEMU only. The Setup UI was exercised on Ubuntu 24.04 and Debian 12 only. Let's Encrypt issuance was tested with a stand-in `certbot`, not on a public host.
+
 ## 1.1.5 — 2026-11-11
 
 - Master accounts can find existing global Git credentials under **Git credentials → Global (legacy)** and replace a token while keeping all project bindings.
