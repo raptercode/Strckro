@@ -838,7 +838,7 @@ function appendLog(line) {
 function paintSteps() {
   var list = document.getElementById('plist');
   if (!list) return;
-  STEPS.forEach(function (id) { var li = list.querySelector('[data-id="' + id + '"]'); if (li) li.setAttribute('data-s', steps[id]); });
+  STEPS.forEach(function (id) { var li = list.querySelector('[data-id="' + id + '"]'); if (li) { li.setAttribute('data-s', steps[id]); li.textContent = mark(steps[id]) + ' ' + t('p_' + id); } });
 }
 function viewInstall() {
   var list = h('ul', { class: 'plist', id: 'plist' });
