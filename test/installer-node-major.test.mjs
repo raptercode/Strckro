@@ -10,8 +10,9 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const available = spawnSync(bash, ['--version']).status === 0;
 const source = (await readFile(new URL('../strckro.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 const shellPath = (path) => path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
-const selection = source.slice(source.indexOf('if [[ -z "$PORTAL_NODE_MAJOR" ]]'), source.indexOf('[[ -n "$DOMAIN"'));
-const provision = source.slice(source.indexOf('node_pin()'), source.indexOf('# Bun is a project runtime'));
+const selection = source.slice(source.indexOf('if [[ -z "$PORTAL_NODE_MAJOR" ]]'), source.indexOf('[[ -f package.json'));
+// The pin helpers sit early (the Setup UI needs them); the rest of the provisioning follows the package install.
+const provision = 'step() { :; }' + String.fromCharCode(10) + source.slice(source.indexOf('node_pin()'), source.indexOf('# End of the Node.js pin helpers.')) + source.slice(source.indexOf('# A project service names'), source.indexOf('# Bun is a project runtime'));
 const exists = (path) => access(path).then(() => true, () => false);
 
 async function fakeRuntime(dir, version, { broken = false } = {}) {
@@ -21,14 +22,72 @@ async function fakeRuntime(dir, version, { broken = false } = {}) {
   for (const tool of ['npm', 'npx']) await writeFile(join(bin, tool), '#!/bin/bash\necho 10.0.0\n');
 }
 
-test('installer pins, scripts/node-versions.mjs and the Docker default name the same Node.js releases', async () => {
-  const pins = new Map([...source.matchAll(/^\s+(20|22|26)\) NODE_PIN_VERSION='([^']+)'; NODE_PIN_SHA='([0-9a-f]{64})' ;;$/gm)].map((match) => [Number(match[1]), { version: match[2], sha: match[3] }]));
-  pins.set(24, { version: source.match(/^NODE_VERSION='([^']+)'$/m)[1], sha: source.match(/^NODE_SHA256='([0-9a-f]{64})'$/m)[1] });
+test('installer pins, scripts/node-versions.mjs and the Docker default name the same Node.js releases for both architectures', async () => {
+  const pins = new Map([...source.matchAll(/^\s+(20|22|26)\) NODE_PIN_VERSION='([^']+)'; sha_x64='([0-9a-f]{64})'; sha_arm64='([0-9a-f]{64})' ;;$/gm)].map((match) => [Number(match[1]), { version: match[2], x64: match[3], arm64: match[4] }]));
+  pins.set(24, {
+    version: source.match(/^NODE_VERSION='([^']+)'$/m)[1],
+    x64: source.match(/^NODE_SHA256_X64='([0-9a-f]{64})'$/m)[1],
+    arm64: source.match(/^NODE_SHA256_ARM64='([0-9a-f]{64})'$/m)[1]
+  });
   assert.deepEqual([...pins.keys()].sort(), [20, 22, 24, 26]);
   for (const [major, version] of Object.entries(NODE_VERSIONS)) assert.equal(pins.get(Number(major)).version, version, `Node ${major} pin differs between strckro.sh and scripts/node-versions.mjs`);
-  assert.equal(new Set([...pins.values()].map((pin) => pin.sha)).size, 4, 'each pinned release needs its own checksum');
+  const hashes = [...pins.values()].flatMap((pin) => [pin.x64, pin.arm64]);
+  assert.equal(new Set(hashes).size, 8, 'each pinned release needs its own checksum per architecture');
   const docker = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
   assert.equal(docker.match(/^ARG NODE_VERSION=(\S+)$/m)[1], NODE_VERSIONS[24]);
+});
+
+test('installer picks the Node.js archive and checksum of the host architecture', { skip: !available }, async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'portal-node-arch-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(join(dir, 'tmp'), { recursive: true });
+  await mkdir(join(dir, 'global'), { recursive: true });
+  const root = shellPath(dir);
+  const script = provision.replaceAll('/opt/', `${root}/opt/`).replaceAll('/usr/local/bin/', `${root}/global/`);
+  const stubs = `
+curl() { local url='' out=''; while [[ $# -gt 0 ]]; do
+  if [[ "$1" == https://* ]]; then url="$1"; fi
+  if [[ "$1" == -o ]]; then out="$2"; fi
+  shift; done
+  echo "$url" >> '${root}/downloads.log'; : > "$out"; }
+sha256sum() { local line; read -r line || true; echo "\${line%% *}" >> '${root}/hashes.log'; }
+tar() { local dir=''; while [[ $# -gt 0 ]]; do
+  if [[ "$1" == --directory ]]; then dir="$2"; fi
+  shift; done
+  mkdir -p "$dir/bin"
+  printf '#!/bin/bash\\necho v%s\\n' "\${dir##*node-v}" > "$dir/bin/node"
+  for tool in npm npx; do printf '#!/bin/bash\\necho 10.0.0\\n' > "$dir/bin/$tool"; done
+  chmod +x "$dir/bin/"*; }
+`;
+  for (const [arch, urlPart] of [['x64', 'linux-x64'], ['arm64', 'linux-arm64']]) {
+    await rm(join(dir, 'downloads.log'), { force: true });
+    await rm(join(dir, 'hashes.log'), { force: true });
+    await rm(join(dir, 'opt'), { recursive: true, force: true });
+    const result = spawnSync(bash, ['-s'], { encoding: 'utf8', input: `set -euo pipefail
+die() { echo "$*" >&2; exit 1; }
+TMP_DIR='${root}/tmp'
+PORTAL_NODE_MAJOR=24
+NODE_VERSION=${NODE_VERSIONS[24]}
+NODE_SHA256_X64=x64hash
+NODE_SHA256_ARM64=arm64hash
+NODE_ARCH=${arch}
+${stubs}
+${script}
+` });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal((await readFile(join(dir, 'downloads.log'), 'utf8')).trim(), `https://nodejs.org/dist/v${NODE_VERSIONS[24]}/node-v${NODE_VERSIONS[24]}-${urlPart}.tar.xz`);
+    assert.equal((await readFile(join(dir, 'hashes.log'), 'utf8')).trim(), `${arch}hash`, `${arch} must verify against its own checksum`);
+  }
+  const unsupported = spawnSync(bash, ['-s'], { encoding: 'utf8', input: `set -euo pipefail
+die() { echo "$*" >&2; exit 1; }
+NODE_VERSION=${NODE_VERSIONS[24]}
+NODE_SHA256_X64=a
+NODE_SHA256_ARM64=b
+NODE_ARCH=riscv64
+${script.slice(0, script.indexOf('install_node_version()'))}
+node_pin 24
+` });
+  assert.notEqual(unsupported.status, 0);
 });
 
 test('installer selected runtime succeeds when an unusable provisioned Node 26 cannot load and global tools match selection', { skip: !available }, async (t) => {
@@ -39,7 +98,9 @@ test('installer selected runtime succeeds when an unusable provisioned Node 26 c
   const root = shellPath(dir);
   const script = provision.replaceAll('/opt/', `${root}/opt/`).replaceAll('/usr/local/bin/', `${root}/global/`);
   for (const major of ['20', '22', '24']) {
-    const result = spawnSync(bash, ['-s'], { encoding: 'utf8', input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/*\nPORTAL_NODE_MAJOR=${major}\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_SHA256=unused\n${script}\n'${root}/global/node' --version\n` });
+    const result = spawnSync(bash, ['-s'], { encoding: 'utf8', input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/*\nPORTAL_NODE_MAJOR=${major}\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_ARCH=x64
+NODE_SHA256_X64=unused
+NODE_SHA256_ARM64=unused\n${script}\n'${root}/global/node' --version\n` });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, new RegExp(`v${major}\\.`));
     // The broken runtime is reported, not fatal, and never becomes the selected one.
@@ -72,7 +133,9 @@ tar() { local dir=''; while [[ $# -gt 0 ]]; do
   for tool in npm npx; do printf '#!/bin/bash\\necho 10.0.0\\n' > "$dir/bin/$tool"; done
   chmod +x "$dir/bin/"*; }
 `;
-  const run = (extra = '') => spawnSync(bash, ['-s'], { encoding: 'utf8', input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/*\nTMP_DIR='${root}/tmp'\nPORTAL_NODE_MAJOR=24\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_SHA256=unused\n${extra}\n${stubs}\n${script}\n'${root}/global/node' --version\n` });
+  const run = (extra = '') => spawnSync(bash, ['-s'], { encoding: 'utf8', input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/*\nTMP_DIR='${root}/tmp'\nPORTAL_NODE_MAJOR=24\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_ARCH=x64
+NODE_SHA256_X64=unused
+NODE_SHA256_ARM64=unused\n${extra}\n${stubs}\n${script}\n'${root}/global/node' --version\n` });
 
   const failed = run(`FAIL_ARCHIVE=node-v${NODE_VERSIONS[22]}`);
   assert.equal(failed.status, 0, failed.stderr);

@@ -9,3 +9,6 @@ release-out/
 
 # Future machine-local research notes; shared docs/{th,en}/knowledge stay tracked.
 /docs/knowledge-local/
+
+# Matrix harness logs
+test/matrix/logs/

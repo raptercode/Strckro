@@ -13,6 +13,22 @@
 - ปิดและเปิดแอป (web service หรือ worker) จาก **Deploy → Turn off / Turn on** หรือ `POST /api/projects/<slug>/stop` และ `/start` (helper operation `stop-project` และ `start-project`) การปิดคือ `systemctl disable --now` จึงคงอยู่หลังรีบูต (Docker Compose ใช้ `docker compose down` โดยเก็บ volume และ image) release, ENV, storage, โดเมนและ Nginx ไม่ถูกแตะ และโดเมนตอบ 502 ขณะปิด Create release, rollback, Restart และ auto deploy จะถูกปฏิเสธหรือบันทึกเป็น blocked ด้วยข้อความ "Project is turned off" รายการ ภาพรวม และ pipeline track แสดง **Off** สีกลางแทน Needs attention ใช้สิทธิ์เดียวกับ Restart และ token ของ `skctl` ใช้ไม่ได้ ดู ADR 0035
 - ยังไม่ได้ตรวจบน host จริง: ทั้งหมดนี้ยังไม่ได้รันกับ systemd หรือ Docker สิ่งที่ต้องตรวจอยู่ใน ADR 0035
 
+## 1.2.1 — 2026-11-16
+
+- เขียนค่า config เป็นข้อมูลโดยตรง รวมถึงอีเมล TLS ที่มีเครื่องหมายพิเศษ ปฏิเสธค่าหลายบรรทัดและคงเจ้าของกับสิทธิ์เดิมของไฟล์
+- Bootstrap ตรวจลายเซ็น Ed25519 ของ manifest ด้วย public key ที่ฝังไว้ และใช้ SHA-256 จาก manifest ตรวจ archive ก่อนแตกไฟล์หรือรัน installer ต้องใช้ Python 3 และ OpenSSL 3
+
+## 1.2.0 — 2026-11-15
+
+- ติดตั้งบนระบบมากขึ้นด้วยคำสั่งเดียวกัน installer รองรับ Ubuntu 22.04, 24.04, 25.04 และ Debian 12, 13 บน amd64 และ arm64 ตรวจ OS และ CPU ก่อนแก้ไขอะไรในเครื่อง เลือก build ของ Node.js และ Bun ให้ตรงสถาปัตยกรรมพร้อม checksum แยกรายสถาปัตยกรรม ติดตั้ง `libatomic1` บน arm64 และใช้ server block ดักการเชื่อมต่อ TLS ที่ไม่ตรงโดเมนแบบสำรองบน Nginx ที่เก่ากว่า 1.19.4 (รุ่น 1.19.4 ขึ้นไปยังใช้ `ssl_reject_handshake`)
+- ตั้ง `server_names_hash_bucket_size 64` ในไฟล์ limits ของ Nginx ของ Strckro เพื่อให้ `nginx -t` ผ่านบน arm64 ถ้า host ตั้งค่านี้ไว้แล้ว Strckro จะตัดค่าของตัวเองออกพร้อมคำเตือน แทนที่จะให้การติดตั้งล้ม
+- Setup UI เมื่อรัน installer โดยไม่ใส่ `--domain` และ `--email` (เช่น `curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --node-major=24`) installer จะเปิดหน้าเว็บชั่วคราวให้กรอกโดเมนและอีเมลสำหรับ TLS ที่ติดต่อได้ แสดงความคืบหน้าการติดตั้งแบบสด และแสดงรหัสผ่าน installer แบบใช้ครั้งเดียวตอนจบ ฟังที่ `127.0.0.1` เท่านั้น และพิมพ์คำสั่ง `ssh -L` กับ URL ที่มี token ส่วนการป้องกันด้วย token, cookie และ CSRF อธิบายไว้ในคู่มือ production installation เพิ่ม `--no-ui` เพื่อใช้การถามในเทอร์มินัลแบบเดิม `--ui-public` เพื่อฟังทุก interface ผ่าน HTTP ธรรมดา หรือ `--ui-port=N` เพื่อเปลี่ยนพอร์ต 8787 **นี่คือค่าเริ่มต้นใหม่เมื่อติดตั้งโดยไม่ใส่โดเมนและอีเมล** สคริปต์ที่เคยพึ่งการถามในเทอร์มินัลต้องใส่ `--no-ui`
+- `sudo strckro update` ไม่เปิด Setup UI อีกต่อไป โดยส่ง `--no-ui` พร้อมโดเมน อีเมล และ Node.js major ที่บันทึกไว้ให้ installer
+- ลอง `certbot` ซ้ำประมาณ 30 วินาทีเมื่อมี Certbot อื่นถือ lock อยู่ และให้ Dovecot เข้าผ่านโฟลเดอร์ตั้งค่า project ได้เมื่อติดตั้ง mail service แล้ว
+- Node.js 24 ยังเป็น major เริ่มต้น เลือก 20, 22 หรือ 26 ได้ด้วย `--node-major`
+- เพิ่มชุดทดสอบ Docker matrix ใน `test/matrix` ที่ติดตั้งบนทุก OS และสถาปัตยกรรมใน container ที่มี systemd ทดสอบ Setup UI ตั้งแต่ต้นจนจบ และอัปเกรดจาก host 1.1.5 จริง
+- ผลทดสอบ: บน Node.js 24 และ 26 ผ่าน 19 จาก 20 ชุด OS และสถาปัตยกรรม การอัปเกรด 1.1.5 → 1.2.0 ผ่านบน Ubuntu 24.04 amd64 **ยังไม่ได้ยืนยัน: Debian 13 บน arm64** ล้มในการทดสอบแบบจำลอง (systemd `226/NAMESPACE`) และยังไม่ได้ลองบนฮาร์ดแวร์ arm64 จริง ผล arm64 อื่นมาจาก QEMU เท่านั้น Setup UI ทดสอบเฉพาะ Ubuntu 24.04 และ Debian 12 การออกใบรับรอง Let's Encrypt ทดสอบด้วย `certbot` จำลอง ไม่ได้ลองบน host สาธารณะ
+
 ## 1.1.5 — 2026-11-11
 
 - บัญชี Master เปิด **Git credentials → Global (legacy)** เพื่อดู credential เดิมและเปลี่ยน token ได้ โดยแอปที่ผูกอยู่ยังใช้ credential เดิม

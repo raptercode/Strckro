@@ -11,8 +11,15 @@ export function preserveManagedTlsForChallenge(httpSite, previousSite) {
   return httpSite + tls;
 }
 
-export function renderUnmatchedNginx(acmeRoot = '/var/lib/hostmgr/acme') {
-  return `# Managed by Dashboard Portal. Do not edit.\nserver {\n    listen 80 default_server;\n    listen [::]:80 default_server;\n    server_name _;\n\n    location ^~ /.well-known/acme-challenge/ {\n        root ${acmeRoot};\n    }\n\n    location / {\n        return 404;\n    }\n}\n\nserver {\n    listen 443 ssl default_server;\n    listen [::]:443 ssl default_server;\n    server_name _;\n    ssl_reject_handshake on;\n}\n`;
+export const UNMATCHED_TLS_DIR = '/etc/hostmgr/unmatched-tls';
+
+// legacyTlsDir: set on Nginx older than 1.19.4 (Ubuntu 22.04), which has no ssl_reject_handshake;
+// the TLS catch-all then presents a throwaway certificate and closes the connection.
+export function renderUnmatchedNginx(acmeRoot = '/var/lib/hostmgr/acme', { legacyTlsDir = null } = {}) {
+  const tlsCatchAll = legacyTlsDir
+    ? `    ssl_certificate ${legacyTlsDir}/cert.pem;\n    ssl_certificate_key ${legacyTlsDir}/key.pem;\n    return 444;\n`
+    : '    ssl_reject_handshake on;\n';
+  return `# Managed by Dashboard Portal. Do not edit.\nserver {\n    listen 80 default_server;\n    listen [::]:80 default_server;\n    server_name _;\n\n    location ^~ /.well-known/acme-challenge/ {\n        root ${acmeRoot};\n    }\n\n    location / {\n        return 404;\n    }\n}\n\nserver {\n    listen 443 ssl default_server;\n    listen [::]:443 ssl default_server;\n    server_name _;\n${tlsCatchAll}}\n`;
 }
 
 export function classifyHttpBody(body) {

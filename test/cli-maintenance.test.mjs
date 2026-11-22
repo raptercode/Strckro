@@ -77,3 +77,9 @@ test('software updater installation avoids a shared lease that would deadlock it
   const body = source.match(/async function update\(values\) \{[^]*?\n\}/)[0];
   assert.doesNotMatch(body, /withMaintenanceLease/);
 });
+
+test('software updater never lets the installer open the Setup UI', async () => {
+  const source = await readFile(new URL('../scripts/strckro-update.mjs', import.meta.url), 'utf8');
+  const call = source.match(/join\(releaseRoot, 'strckro\.sh'\)[^\n]*/)[0];
+  assert.match(call, /'--no-ui'/);
+});

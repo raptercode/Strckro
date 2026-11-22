@@ -287,8 +287,10 @@ test('installer snapshots only small control-plane state files, not project work
 test('installer provisions a checksum-verified Bun runtime for Bun projects', async () => {
   const script = await readFile(new URL('../strckro.sh', import.meta.url), 'utf8');
   assert.match(script, /BUN_VERSION='1\.3\.13'/);
-  assert.match(script, /BUN_SHA256='9d8a24292a7068090205daac0a5a223f5f69736f5287e37bf88d3b4031edc750'/);
-  assert.match(script, /bun-linux-x64-baseline\.zip/);
+  assert.match(script, /BUN_SHA256_X64='9d8a24292a7068090205daac0a5a223f5f69736f5287e37bf88d3b4031edc750'/);
+  assert.match(script, /BUN_SHA256_ARM64='70bae41b3908b0a120e1e58c5c8af30e74afae3b8d11b0d3fdd8e787ddfb4b22'/);
+  assert.match(script, /bun-linux-x64-baseline/);
+  assert.match(script, /bun-linux-aarch64/);
   assert.match(script, /\/usr\/local\/bin\/bun/);
   assert.match(script, /unzip git/);
 });

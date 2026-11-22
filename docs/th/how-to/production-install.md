@@ -5,7 +5,7 @@
 หลังติดตั้งใช้ `strckro -h` หรือ `--help` ดูคำสั่ง CLI ทั้งหมด และ `strckro -v` หรือ `--versions` ดู Portal/runtime versions โดยไม่ต้อง sudo ใช้ `dashboard-portal update --help` ดูคู่มือได้เช่นกัน ส่วน update, configure-update และ reset password ยังต้อง sudo
 
 
-คู่มือนี้ใช้กับ **Ubuntu Server 24.04 หรือ 25.04, amd64** ที่ผ่านเงื่อนไข installer การติดตั้งจริงใช้ systemd และ Nginx; Docker Compose ใน repository ใช้ทดลองบนเครื่องพัฒนา
+คู่มือนี้ใช้กับ **Ubuntu Server 22.04, 24.04 หรือ 25.04 และ Debian 12 หรือ 13 บน amd64 หรือ arm64** ที่ผ่านเงื่อนไข installer การติดตั้งจริงใช้ systemd และ Nginx; Docker Compose ใน repository ใช้ทดลองบนเครื่องพัฒนา
 
 ## เตรียมเครื่อง
 
@@ -34,11 +34,28 @@ curl -fsSL https://dashboard-portal.cloud/install.sh | bash
 curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --version v1.1.0
 ```
 
-`bash -s` ให้อ่าน script จาก pipe และ `--` แยก arguments ที่ส่งให้ installer ระบุ tag แบบ `v<major>.<minor>.<patch>` เช่น `v1.1.0` ไม่ใช่ `0.8.3` เลือกเฉพาะ release ที่มี archive และ checksum เผยแพร่แล้ว หากไม่พบเวอร์ชันหรือดาวน์โหลดไม่ได้จะหยุด ไม่เปลี่ยนไปใช้ latest แทน ดูรุ่นที่มีใน [GitHub Releases](https://github.com/raptercode/Strckro/releases)
+`bash -s` ให้อ่าน script จาก pipe และ `--` แยก arguments ที่ส่งให้ installer ระบุ tag แบบ `v<major>.<minor>.<patch>` เช่น `v1.1.0` ไม่ใช่ `0.8.3` เลือกเฉพาะ release ที่มี archive และ signed manifest `stable.json` เผยแพร่แล้ว หากไม่พบเวอร์ชันหรือดาวน์โหลดไม่ได้จะหยุด ไม่เปลี่ยนไปใช้ latest แทน ดูรุ่นที่มีใน [GitHub Releases](https://github.com/raptercode/Strckro/releases)
+
+### Setup UI (ค่าเริ่มต้น)
+
+เมื่อไม่ระบุทั้ง `--domain` และ `--email` และไม่ได้ใส่ `--no-ui` ตัวติดตั้งจะเปิดหน้าเว็บชั่วคราวแทนการถามใน terminal ลำดับบน server: ตรวจ OS/สถาปัตยกรรม, ขอ maintenance lock, ติดตั้ง Node.js รุ่นที่ pin ไว้ตาม `--node-major` (และ `curl`, `ca-certificates`, `xz-utils` หาก image ไม่มี ยังไม่ติดตั้งอย่างอื่น) แล้วจึงเปิดหน้าเว็บ lock จะถูกปล่อยระหว่างที่คุณกรอกฟอร์ม การติดตั้งจริงคือ `strckro.sh --domain=... --email=... --node-major=... --no-ui` ตามปกติ จึงมี backup, rollback และการตรวจ HTTPS ตอนท้ายเหมือนเดิม
+
+1. Terminal จะพิมพ์คำสั่ง `ssh -L 8787:127.0.0.1:8787 user@server` และที่อยู่แบบ `http://127.0.0.1:8787/?token=...` ให้รันคำสั่ง `ssh -L` บนเครื่องของคุณ แล้วเปิดที่อยู่นั้นในเบราว์เซอร์
+2. ขั้นตอนในหน้าเว็บ: ตรวจเซิร์ฟเวอร์ (OS, CPU, root, หน่วยความจำ, ดิสก์, พอร์ต 80/443/3100, การเชื่อมต่อ nodejs.org และ github.com), ตั้งค่า (โดเมนพร้อมตรวจ DNS สด, อีเมล TLS, Node.js major โดยแนะนำ 24), ทบทวน, log การติดตั้งสดพร้อมรายการขั้นตอน และหน้าสรุป รองรับภาษาอังกฤษและไทย
+3. หากล้มเหลว หน้าเว็บแสดงบรรทัดที่ผิดพลาดและบอกว่าตัวติดตั้งย้อนการเปลี่ยนแปลงแล้วหรือไม่ พร้อมปุ่ม Retry แพ็กเกจที่ติดตั้งแล้วและใบรับรองที่ออกไปแล้วไม่ถูกย้อน (เหมือนการติดตั้งผ่าน terminal)
+4. หน้าเว็บไม่เคยขอรหัสผ่าน ตัว setup server สร้างรหัสผ่านตัวติดตั้งแบบสุ่ม 24 ตัวอักษร ส่งให้ตัวติดตั้งทาง stdin (เหมือนเส้นทาง terminal) กรองออกจากผลลัพธ์ทุกช่องทาง และแสดงครั้งเดียวในหน้าสรุป และใน terminal เฉพาะเมื่อเป็น terminal แบบโต้ตอบ ให้กรอกเป็น "installer password" เมื่อเปิดพอร์ทัลครั้งแรกเพื่อสร้างบัญชีเจ้าของ หากเคยติดตั้งแล้ว จะไม่สร้างรหัสใหม่และรหัสเดิมไม่เปลี่ยน
+
+| Flag | ผล |
+| --- | --- |
+| `--no-ui` | ไม่เปิดหน้าเว็บ ถามใน terminal (หรือใส่ `--domain=D --email=E` ซึ่งข้ามหน้าเว็บเช่นกัน) |
+| `--ui-public` | ฟังที่ `0.0.0.0` แทน `127.0.0.1` หน้านี้เป็น HTTP ธรรมดา ข้อมูลทั้งหมดไม่ถูกเข้ารหัส มีเพียงโทเค็นที่ป้องกัน ใช้เฉพาะเครือข่ายที่เชื่อถือได้ |
+| `--ui-port=N` | พอร์ตของหน้าเว็บ (ค่าเริ่มต้น 8787) |
+
+โมเดลความปลอดภัย: หน้านี้เกิดก่อนที่ TLS จะมี จึง bind ที่ `127.0.0.1` โดยค่าเริ่มต้นและเข้าผ่าน SSH tunnel ทุก request ต้องมีโทเค็นสุ่ม 256 บิต (โทเค็นใน URL แลกเป็นคุกกี้ `HttpOnly`, `SameSite=Strict` เทียบแบบ constant-time) request ที่เปลี่ยนสถานะต้องมี CSRF header ต่อเซสชันและ `Origin` เดียวกัน ตรวจ allow-list ของ `Host` ใช้ Content-Security-Policy แบบเข้มงวด ไม่มี asset ภายนอกและไม่มี CORS ติดตั้งได้ทีละครั้งเดียว เซิร์ฟเวอร์ปิดเองหลังติดตั้งสำเร็จ (ไม่นานหลังแสดงรหัสผ่าน) หลังไม่มีการใช้งาน 30 นาที และเมื่อกด Ctrl+C หลังล้มเหลวจะยังเปิดอยู่เพื่อให้ลองใหม่ กฎการตรวจ input เหมือน `strckro.sh` และบังคับฝั่ง server ทดสอบด้วย HTTP client แบบสคริปต์บน container Ubuntu 24.04 และ Debian 12 (amd64) ยังไม่ได้ตรวจในเบราว์เซอร์จริงหรือทุก OS ที่รองรับ
 
 ### ต้องใส่อีเมลและข้อมูลอะไรบ้าง
 
-รันบน server ผ่าน interactive SSH ด้วยบัญชี root หรือบัญชีที่ใช้ sudo ได้ ระบบถามข้อมูลใน terminal จึงไม่ต้องใส่อีเมลหรือ domain ใน command line:
+เมื่อใช้ `--no-ui` หรือระบุ `--domain` และ `--email` ให้รันบน server ผ่าน interactive SSH ด้วยบัญชี root หรือบัญชีที่ใช้ sudo ได้ ตัวติดตั้งจะถามเฉพาะค่าที่ไม่ได้ระบุใน terminal:
 
 | ข้อมูล | จำเป็นไหม | ใส่อะไร |
 | --- | --- | --- |
@@ -49,7 +66,7 @@ curl -fsSL https://dashboard-portal.cloud/install.sh | bash -s -- --version v1.1
 
 ปล่อย TLS email ว่างไม่ได้ อีเมลนี้แยกจากอีเมลบัญชี login ซึ่งตั้งตอนสร้างบัญชีแรกในเว็บ ไม่ต้องติดตั้ง mail server เพื่อใช้อีเมลนี้ คำสั่งปกติใช้ Node 24 สำหรับ Portal ระบบอ่าน prompts ผ่าน `/dev/tty` จึงทำงานได้แม้ stdin เป็น pipe ไม่ต้องดาวน์โหลดหรือแตก release เอง
 
-Bootstrap ดาวน์โหลด archive และ checksum ของ release จาก GitHub ผ่าน HTTPS ตรวจ SHA-256 แล้วเรียก installer จาก directory ชั่วคราว หยุดเมื่อดาวน์โหลดหรือ checksum ไม่ผ่าน การตรวจ checksum ของ bootstrap อาศัยความเชื่อถือใน HTTPS/GitHub; signed updater หลังติดตั้งตรวจ Ed25519 เพิ่มด้วย
+Bootstrap ต้องใช้ Python 3 และ OpenSSL 3 โดยดาวน์โหลด `stable.json` จาก release ที่เลือกและตรวจลายเซ็น Ed25519 ด้วย public key ที่ฝังใน `install.sh` จากนั้นตรวจว่า manifest ตรงกับ release ที่เลือก และใช้ SHA-256 ที่ลงลายเซ็นไว้ตรวจ archive ก่อนแตกไฟล์หรือรัน installer หากไม่มี manifest หรือตรวจไม่ผ่านจะหยุด ควรรับ bootstrap จากแหล่งที่เชื่อถือได้
 
 Installer เตรียม Node major ที่เลือกพร้อมตรวจ checksum โดยไม่ติดตั้ง major ที่ไม่ได้ใช้ Runtime ของ project ที่มีอยู่ยังคงไว้ ตรวจเครื่องมือที่พร้อมจริงอีกครั้งใน Setup/Doctor และอ่าน [Node versions](node-versions.md) สำหรับ runtime และ nvm
 

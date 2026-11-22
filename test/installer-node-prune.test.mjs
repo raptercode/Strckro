@@ -10,8 +10,9 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const available = spawnSync(bash, ['--version']).status === 0;
 const source = (await readFile(new URL('../strckro.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
 const shellPath = (path) => path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
-// Function definitions only: from node_pin() up to the line that first calls provision_node_runtimes.
-const definitions = source.slice(source.indexOf('node_pin()'), source.indexOf('\nprovision_node_runtimes\nnode_pin'));
+// Function definitions only: the pin helpers (defined early, for the Setup UI), then everything up to the line that first calls provision_node_runtimes.
+const pinHelpers = source.slice(source.indexOf('node_pin()'), source.indexOf('# End of the Node.js pin helpers.'));
+const definitions = 'step() { :; }' + String.fromCharCode(10) + pinHelpers + source.slice(source.indexOf('# A project service names'), source.indexOf('\nprovision_node_runtimes\nnode_pin'));
 const exists = (path) => access(path).then(() => true, () => false);
 
 // A runtime laid out exactly as the Node.js archive unpacks it.
@@ -33,7 +34,9 @@ async function fixture(t) {
   for (const sub of ['units', 'projects', 'proc', join('proc', 'self')]) await mkdir(join(dir, sub), { recursive: true });
   const prune = (extra = '') => spawnSync(bash, ['-s'], {
     encoding: 'utf8',
-    input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/* 2>/dev/null || true\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_SHA256=unused\nNODE_RUNTIME_ROOT='${root}/opt'\nSERVICE_UNIT_DIR='${root}/units'\nPROJECT_CONFIG_DIR='${root}/projects'\nPROC_DIR='${root}/proc'\n${definitions}\n${extra}\nprune_node_runtimes\n`
+    input: `set -euo pipefail\ndie() { echo "$*" >&2; exit 1; }\nchmod +x '${root}'/opt/*/bin/* 2>/dev/null || true\nNODE_VERSION=${NODE_VERSIONS[24]}\nNODE_ARCH=x64
+NODE_SHA256_X64=unused
+NODE_SHA256_ARM64=unused\nNODE_RUNTIME_ROOT='${root}/opt'\nSERVICE_UNIT_DIR='${root}/units'\nPROJECT_CONFIG_DIR='${root}/projects'\nPROC_DIR='${root}/proc'\n${definitions}\n${extra}\nprune_node_runtimes\n`
   });
   return { dir, root, prune };
 }

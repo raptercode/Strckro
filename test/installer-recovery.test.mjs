@@ -226,6 +226,27 @@ ${directories}
   assert.equal(result.stdout, 'parent=0750\nprojects=0750\nparent=0711\nprojects=0750\n');
 });
 
+test('installer updates config values literally and rejects multiline entries', { skip: process.platform === 'win32' && spawnSync(bash, ['--version']).status !== 0 }, () => {
+  const writer = source.slice(source.indexOf('die()'), source.indexOf('cleanup()'));
+  const result = spawnSync(bash, ['-s'], { encoding: 'utf8', timeout: 8000, input: `
+set -Eeuo pipefail
+root=$(mktemp -d)
+trap 'rm -f -- "$root/config"; rmdir -- "$root"' EXIT
+config="$root/config"
+printf '%s\\n' '# header' 'HOSTMGR_ACME_EMAIL=old@example.test' 'HOSTMGR_ACME_EMAIL_BACKUP=keep' > "$config"
+chmod 0640 "$config"
+before=$(stat -c '%u:%g:%a' "$config")
+${writer}
+set_config_value HOSTMGR_ACME_EMAIL 'a&b|c@example.test' "$config"
+set_config_value HOSTMGR_PORTAL_DOMAIN portal.example.test "$config"
+if (set_config_value HOSTMGR_ACME_EMAIL $'line\\nline' "$config"); then exit 3; fi
+[[ "$before" == "$(stat -c '%u:%g:%a' "$config")" ]]
+cat "$config"
+` });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '# header\nHOSTMGR_ACME_EMAIL=a&b|c@example.test\nHOSTMGR_ACME_EMAIL_BACKUP=keep\nHOSTMGR_PORTAL_DOMAIN=portal.example.test\n');
+});
+
 const tmpfilesPrerequisite = process.platform !== 'linux' ? 'Requires Linux systemd-tmpfiles and root ownership acceptance' : process.getuid() !== 0 ? 'Requires root to verify production tmpfiles ownership' : spawnSync('systemd-tmpfiles', ['--version']).status !== 0 ? 'Requires systemd-tmpfiles installed in the Linux acceptance fixture' : false;
 test('boot tmpfiles restores maintenance paths and preserves an existing live lock inode', { skip: tmpfilesPrerequisite }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'portal-tmpfiles-'));

@@ -16,7 +16,7 @@ import { withMaintenanceLease } from './maintenance-lock.mjs';
 import { parseWorkerServiceState, assertWorkerStable } from './worker-health.mjs';
 import { prepareWorkerActivation } from './worker-activation.mjs';
 import { updateStoredPassword } from './password-config.mjs';
-import { buildEdgeEvaluation, probeLoopbackHttp, probeLoopbackTls, publicEdgeResult, renderUnmatchedNginx, preserveManagedTlsForChallenge } from './nginx-edge.mjs';
+import { buildEdgeEvaluation, probeLoopbackHttp, probeLoopbackTls, publicEdgeResult, renderUnmatchedNginx, preserveManagedTlsForChallenge, UNMATCHED_TLS_DIR } from './nginx-edge.mjs';
 import { resolvePublicDomainAddresses } from './domain-dns.mjs';
 import { MAIL_CONFIG_MARKER, MAIL_CONFIG_VERSION, MAIL_SENDER_LOGINS_MAP, MAIL_SUBMISSION_USERS_FILE, MailRequestError, assertOnlyFields, boundedInteger, buildMailPortPlan, renderDkimTables, renderDovecotConfiguration, renderMap, renderOpenDkimConfiguration, renderPostfixMain, renderPostfixMaster, renderSenderLoginMap, replacePasswdHash, submissionLogin, validDovecotHash, validateMailProjectSlug, validateMailboxPassword } from './mail-host-config.mjs';
 import { DELIVERY_HOURS_DEFAULT, DELIVERY_HOURS_MAX, DELIVERY_LIMIT_DEFAULT, DELIVERY_LIMIT_MAX, DELIVERY_LOG_LINES_MAX, createDeliveryCollector, createQueueSummary } from './mail-delivery-log.mjs';
@@ -1295,7 +1295,9 @@ async function applyDomains(project) {
 async function ensureUnmatchedNginx() {
   const site = join(NGINX_AVAILABLE, 'hostmgr-unmatched.conf');
   const enabled = join(NGINX_ENABLED, 'hostmgr-unmatched.conf');
-  await writeNginx(site, enabled, renderUnmatchedNginx(ACME_ROOT));
+  // The installer creates this certificate only on Nginx without ssl_reject_handshake (< 1.19.4).
+  const legacyTlsDir = await exists(join(UNMATCHED_TLS_DIR, 'cert.pem')) ? UNMATCHED_TLS_DIR : null;
+  await writeNginx(site, enabled, renderUnmatchedNginx(ACME_ROOT, { legacyTlsDir }));
 }
 
 async function inspectProjectEdge(slug, hostname) {
