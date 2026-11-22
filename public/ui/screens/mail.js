@@ -7,6 +7,7 @@ import {
   folderLabel,
   mailHref,
   mailLocation,
+  mailShortcut,
 } from "./mail/model.js";
 import { wizard } from "./mail/setup.js";
 import { domainsView, mailboxesView, serverView } from "./mail/manage.js";
@@ -74,6 +75,11 @@ async function workspace(ctx) {
     listLive: false,
     select: null,
     reloadList: null,
+    // Set by the message list: keyboard actions, delete-and-advance, and the
+    // actions of the open message once it has loaded.
+    keys: null,
+    deleteById: null,
+    readerActions: null,
     // A view checks this after every await: the reader may have moved on meanwhile.
     alive: (token) => ctx.active() && token === ws.token,
     readerAlive: (token, reader) => ws.alive(token) && reader === ws.readerToken,
@@ -225,6 +231,9 @@ async function workspace(ctx) {
     ws.listLive = false;
     ws.select = null;
     ws.reloadList = null;
+    ws.keys = null;
+    ws.deleteById = null;
+    ws.readerActions = null;
     sidebar();
     const { view } = ws.location;
     if (view === "domains") domainsView(ws);
@@ -232,6 +241,20 @@ async function workspace(ctx) {
     else if (view === "server") serverView(ws);
     else void inboxView(ws);
   }
+
+  // Keyboard shortcuts for the message list. One listener for the whole
+  // workspace, removed with the screen; the list decides what each key does.
+  const onKey = (event) => {
+    if (!ws.keys || ws.location.view !== "inbox" || event.defaultPrevented) return;
+    const action = mailShortcut(event);
+    if (!action) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable='false']), .mail-compose")) return;
+    if (document.querySelector("dialog[open]")) return;
+    if (ws.keys(action)) event.preventDefault();
+  };
+  document.addEventListener("keydown", onKey);
+  ctx.onDispose(() => document.removeEventListener("keydown", onKey));
 
   // The page heading is kept for assistive technology and the document title only.
   ctx.root.replaceChildren(h("h1", { class: "mail-title" }, "Mail"), app);

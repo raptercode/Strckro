@@ -780,10 +780,11 @@ test("Git credential editor and team invitations use the new dialogs without los
   assert.ok(invitations[0].memberships.length > 0);
 });
 
-test("Mail identity and delivery configuration save independently through the new step navigator", async (t) => {
+test("Mail identity and delivery configuration save independently as checklist rows", async (t) => {
   const { page, go, context, base } = await fixture(t);
   await go("/mail/setup");
-  await page.getByRole("button", { name: /Identity$/ }).click();
+  // Rows open in place: Identity first, Delivery mode once the domain is saved.
+  await page.locator('[data-row="identity"] .setup-toggle').click();
   await page
     .getByRole("textbox", { name: "Mail hostname", exact: false })
     .fill("mail.example.test");
@@ -794,7 +795,7 @@ test("Mail identity and delivery configuration save independently through the ne
     .getByRole("textbox", { name: "Domain", exact: true })
     .fill("example.test");
   await page.getByRole("button", { name: "Add domain", exact: true }).click();
-  await page.getByRole("button", { name: /Delivery$/ }).click();
+  await page.locator('[data-row="delivery"] .setup-toggle').click();
   await page
     .getByRole("combobox", { name: "Delivery mode", exact: true })
     .selectOption("relay-587");

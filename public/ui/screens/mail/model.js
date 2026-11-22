@@ -241,3 +241,56 @@ export function generatePassword(length = 20, random = globalThis.crypto) {
   }
   return password.padEnd(length, "x");
 }
+
+// ---- Reader craft: filters, shortcuts and what to open after a delete. ----
+
+export const MAIL_FILTERS = [
+  ["all", "All"],
+  ["unread", "Unread"],
+  ["starred", "Starred"],
+  ["attachment", "Has attachment"],
+];
+// Filters only look at the messages already loaded for the current page.
+export function filterMessages(messages, filter = "all") {
+  const list = Array.isArray(messages) ? messages : [];
+  if (filter === "unread") return list.filter((message) => !message.seen);
+  if (filter === "starred") return list.filter((message) => !!message.flagged);
+  if (filter === "attachment") return list.filter((message) => !!message.hasAttachments);
+  return list;
+}
+// After a message is removed: the one below it, else the one above, else none.
+export function neighbourAfterRemoval(ids, id) {
+  const index = ids.indexOf(id);
+  if (index < 0) return "";
+  return ids[index + 1] ?? ids[index - 1] ?? "";
+}
+
+export const MAIL_SHORTCUTS = [
+  ["j / k", "Next / previous message"],
+  ["r", "Reply"],
+  ["f", "Forward"],
+  ["c", "Compose"],
+  ["u", "Toggle unread"],
+  ["s", "Toggle star"],
+  ["# / Delete", "Delete"],
+  ["Esc", "Close message"],
+];
+const SHORTCUT_KEYS = {
+  j: "next",
+  k: "prev",
+  r: "reply",
+  f: "forward",
+  c: "compose",
+  u: "unread",
+  s: "star",
+  "#": "delete",
+  Delete: "delete",
+  Escape: "close",
+};
+// Key event (or any object with the same fields) to an action name, or null.
+// Ctrl, Meta and Alt always belong to the browser.
+export function mailShortcut(event) {
+  if (!event || event.ctrlKey || event.metaKey || event.altKey) return null;
+  const key = typeof event.key === "string" && event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  return Object.hasOwn(SHORTCUT_KEYS, key) ? SHORTCUT_KEYS[key] : null;
+}

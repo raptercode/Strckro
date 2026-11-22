@@ -9,18 +9,22 @@
   color-scheme: light;
 
   /* Paper */
-  --paper: #efede4;
-  --paper-sunk: #e5e2d5;
-  --card: #fbfaf5;
-  --card-raised: #fff;
-  --field: #fff;
-  --rule: #dcd8ca;
-  --rule-strong: #c5c0ad;
+  /* Light is a toned paper, never white: structure comes from rules, not from
+     the contrast between surfaces, so nothing glares. */
+  --paper: #e9e6da;
+  --paper-sunk: #dedacb;
+  --card: #f6f3e8;
+  --card-raised: #fbf9f1;
+  --field: #fbf9f1;
+  --rule: #d3cfbf;
+  --rule-strong: #b8b39f;
+  --hover: rgb(24 36 29 / 0.05);
+  --selected: rgb(24 36 29 / 0.09);
 
   /* Ink */
-  --ink: #111b16;
-  --ink-2: #44534a;
-  --ink-3: #75837a;
+  --ink: #18241d;
+  --ink-2: #3f4e45;
+  --ink-3: #536157;
   --on-ink: #f6f5ee;
 
   /* Signal */
@@ -28,19 +32,24 @@
   --signal-hover: #c9f553;
   --signal-edge: #b5e334;
   --signal-ink: #15230a;
-  --signal-text: #3a6d05;
-  --signal-wash: #e7f5c3;
-  --focus: #3a6d05;
+  --signal-text: #35640a;
+  --signal-wash: #e0ecb8;
+  /* Lime is a fill only on primary buttons. Counters and tints use the quiet
+     chip pair and the muted mix colour, which only light theme tones down. */
+  --signal-chip-bg: var(--signal-wash);
+  --signal-chip-fg: var(--signal-text);
+  --signal-mix: #c3d57c;
+  --focus: #35640a;
 
   /* State */
-  --ok: #3d8710;
-  --ok-wash: #e2f0cb;
-  --warn: #a2650a;
-  --warn-wash: #f7e7c3;
-  --bad: #b83626;
-  --bad-wash: #f8dcd5;
-  --busy: #0a7b6a;
-  --busy-wash: #cbece4;
+  --ok: #2f6d0a;
+  --ok-wash: #dbe8c4;
+  --warn: #85520a;
+  --warn-wash: #f0e0b8;
+  --bad: #a52f20;
+  --bad-wash: #f0d6cd;
+  --busy: #08695a;
+  --busy-wash: #c6e3da;
   --idle: #8b958e;
 
   /* Code */
@@ -48,10 +57,10 @@
   --code-ink: #d4e3d2;
   --code-dim: #6b8176;
 
-  --shadow-pop: 0 24px 64px -16px rgb(17 27 22 / 0.35), 0 2px 8px rgb(17 27 22 / 0.08);
-  --shadow-card: 0 1px 0 rgb(17 27 22 / 0.04);
+  --shadow-pop: 0 20px 48px -16px rgb(24 36 29 / 0.28), 0 0 0 1px rgb(24 36 29 / 0.06);
+  --shadow-card: none;
   --glow: none;
-  --backdrop: rgb(17 27 22 / 0.5);
+  --backdrop: rgb(24 36 29 / 0.45);
 
   /* Shape and space */
   --r-xs: 3px;
@@ -100,6 +109,11 @@ html[data-theme="dark"] {
   --signal-ink: #11200a;
   --signal-text: #d8ff70;
   --signal-wash: #1b290f;
+  --signal-chip-bg: var(--signal);
+  --signal-chip-fg: var(--signal-ink);
+  --signal-mix: var(--signal);
+  --hover: rgb(255 255 255 / 0.04);
+  --selected: rgb(255 255 255 / 0.08);
   --focus: #d8ff70;
 
   --ok: #c6f56a;

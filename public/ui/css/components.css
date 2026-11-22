@@ -179,12 +179,12 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--focus);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 42%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-mix) 42%, transparent);
 }
 html[data-theme="dark"] input:focus,
 html[data-theme="dark"] select:focus,
 html[data-theme="dark"] textarea:focus {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-mix) 22%, transparent);
 }
 input:disabled,
 input[readonly],
@@ -353,13 +353,13 @@ legend {
   padding: 11px 16px 11px 18px;
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--signal) 14%, var(--card));
+  background: color-mix(in srgb, var(--signal-mix) 14%, var(--card));
   box-shadow: inset 3px 0 0 var(--tone);
   color: var(--ink-2);
   font-size: 13px;
 }
 html[data-theme="dark"] .notice {
-  background: color-mix(in srgb, var(--signal) 6%, var(--card));
+  background: color-mix(in srgb, var(--signal-mix) 6%, var(--card));
 }
 .notice.warning {
   --tone: var(--warn);
@@ -511,7 +511,7 @@ tbody tr {
   transition: background-color 0.1s;
 }
 tbody tr:hover {
-  background: color-mix(in srgb, var(--signal) 8%, transparent);
+  background: color-mix(in srgb, var(--signal-mix) 8%, transparent);
 }
 tbody tr:hover > td:first-child {
   box-shadow: inset 2px 0 0 var(--signal-edge);
@@ -520,7 +520,7 @@ tbody tr.row-link {
   cursor: pointer;
 }
 tbody tr.row-link:active {
-  background: color-mix(in srgb, var(--signal) 14%, transparent);
+  background: color-mix(in srgb, var(--signal-mix) 14%, transparent);
 }
 tr.row-link:hover .app-name,
 tr.row-link:hover .text-button {
@@ -607,7 +607,7 @@ td:first-child {
   border-bottom: 0;
 }
 a.list-row:hover {
-  background: color-mix(in srgb, var(--signal) 8%, transparent);
+  background: color-mix(in srgb, var(--signal-mix) 8%, transparent);
 }
 .list-row > div:first-child {
   min-width: 0;
@@ -789,7 +789,7 @@ a.list-row:hover {
   border-radius: var(--r-md);
 }
 .timeline > li > a:hover {
-  background: color-mix(in srgb, var(--signal) 8%, transparent);
+  background: color-mix(in srgb, var(--signal-mix) 8%, transparent);
 }
 .timeline > li::before {
   content: "";
@@ -1247,7 +1247,7 @@ textarea.code {
 .command-list a:hover,
 .command-list a:focus {
   outline: none;
-  background: color-mix(in srgb, var(--signal) 18%, transparent);
+  background: color-mix(in srgb, var(--signal-mix) 18%, transparent);
   box-shadow: inset 2px 0 0 var(--signal-edge);
 }
 .command-list strong {
@@ -1390,12 +1390,12 @@ html:not([data-theme="dark"]) .toast.error .i {
 .picker-trigger[aria-expanded="true"],
 .picker-trigger:focus-visible {
   border-color: var(--focus);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 42%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-mix) 42%, transparent);
   outline: none;
 }
 html[data-theme="dark"] .picker-trigger[aria-expanded="true"],
 html[data-theme="dark"] .picker-trigger:focus-visible {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-mix) 22%, transparent);
 }
 .picker-trigger:disabled {
   background: var(--paper-sunk);
@@ -1458,7 +1458,7 @@ html[data-theme="dark"] .picker-trigger:focus-visible {
   cursor: pointer;
 }
 .picker-option.active:not([aria-disabled="true"]) {
-  background: color-mix(in srgb, var(--signal) 18%, transparent);
+  background: color-mix(in srgb, var(--signal-mix) 18%, transparent);
   box-shadow: inset 2px 0 0 var(--signal-edge);
 }
 .picker-option[aria-disabled="true"] {
@@ -1504,11 +1504,11 @@ html[data-theme="dark"] .picker-trigger:focus-visible {
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--signal) 14%, var(--card));
+  background: color-mix(in srgb, var(--signal-mix) 14%, var(--card));
   box-shadow: inset 3px 0 0 var(--signal-edge);
 }
 html[data-theme="dark"] .detected {
-  background: color-mix(in srgb, var(--signal) 6%, var(--card));
+  background: color-mix(in srgb, var(--signal-mix) 6%, var(--card));
 }
 .detected > div {
   display: grid;

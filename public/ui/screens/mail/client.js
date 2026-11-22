@@ -1,7 +1,10 @@
 // The mailbox reader: folders, a message list, one open message and a compose window.
 import { h, icon, button, empty, bytes } from "../../core/dom.js";
 import {
+  MAIL_FILTERS,
   MAIL_PAGE_SIZE,
+  MAIL_SHORTCUTS,
+  filterMessages,
   folderLabel,
   folderShowsRecipients,
   formatMailDate,
@@ -11,6 +14,7 @@ import {
   linkify,
   mailHref,
   mailHtmlDocument,
+  neighbourAfterRemoval,
   personLabel,
   replyDraft,
 } from "./model.js";
@@ -63,6 +67,46 @@ async function list(ws, mailbox) {
   const newer = button(icon("chevron-left"), () => ws.show({ offset: Math.max(0, offset - MAIL_PAGE_SIZE) }), "icon", { "aria-label": "อีเมลที่ใหม่กว่า", title: "ใหม่กว่า", disabled: offset === 0 });
   const rows = h("div", { class: "mail-list", role: "list", "aria-label": folderLabel(folder) });
   let page = null;
+  let filter = MAIL_FILTERS.some(([id]) => id === ws.filter) ? ws.filter : "all";
+  const filterNote = h("small", { class: "mail-filter-note", hidden: true });
+  const chips = h(
+    "div",
+    { class: "mail-filter-chips", role: "group", "aria-label": "Filter messages" },
+    ...MAIL_FILTERS.map(([id, label]) =>
+      h(
+        "button",
+        {
+          type: "button",
+          class: "mail-filter",
+          "data-filter": id,
+          "aria-pressed": String(id === filter),
+          onclick: () => {
+            filter = ws.filter = id;
+            for (const chip of chips.children) chip.setAttribute("aria-pressed", String(chip.dataset.filter === id));
+            paint();
+          },
+        },
+        label,
+      ),
+    ),
+  );
+  const keysHelp = h(
+    "dl",
+    { class: "mail-keys", id: "mail-keys-help", hidden: true },
+    ...MAIL_SHORTCUTS.flatMap(([keys, what]) => [h("dt", {}, h("kbd", {}, keys)), h("dd", {}, what)]),
+  );
+  const keysToggle = h("button", {
+    type: "button",
+    class: "btn icon mail-keys-toggle",
+    "aria-label": "Keyboard shortcuts",
+    "aria-controls": "mail-keys-help",
+    "aria-expanded": "false",
+    title: MAIL_SHORTCUTS.map(([keys, what]) => `${keys}: ${what}`).join(" | "),
+    onclick: () => {
+      keysHelp.hidden = !keysHelp.hidden;
+      keysToggle.setAttribute("aria-expanded", String(!keysHelp.hidden));
+    },
+  }, "?");
 
   const flag = async (message, changes) => {
     const result = await ctx.api.post(messagePath(mailbox, message.id, folder, "/flags"), changes);
@@ -76,12 +120,18 @@ async function list(ws, mailbox) {
       !(await ctx.confirm("ลบอีเมลถาวร?", "อีเมลใน Trash ที่ลบแล้วกู้คืนไม่ได้", "ลบถาวร"))
     )
       return;
+    // Where to go once this one is gone, from the list as it is shown now.
+    const shown = visible().map((item) => item.id);
+    // The row stays until the server has confirmed: no optimistic delete.
     await ctx.api.delete(messagePath(mailbox, message.id, folder));
     ctx.toast(folder === "Trash" ? "ลบอีเมลถาวรแล้ว" : "ย้ายไป Trash แล้ว");
-    // The message that was just deleted must not stay open beside the list.
-    if (ws.location.message === message.id) ws.show({ message: "" }, { replace: true });
+    if (!ws.alive(token)) return;
+    // The deleted message must not stay open: the next one takes its place.
+    if (ws.location.message === message.id)
+      ws.show({ message: neighbourAfterRemoval(shown, message.id) }, { replace: true });
     await load();
   };
+  const visible = () => (page ? filterMessages(page.messages, filter) : []);
 
   const row = (message) => {
     const who = recipients
@@ -140,7 +190,7 @@ async function list(ws, mailbox) {
     if (!page) return;
     // The list reloads in the background; identical rows are left alone so a
     // click in progress is never lost to a rebuild.
-    const signature = JSON.stringify(page);
+    const signature = JSON.stringify([page, filter]);
     if (signature === painted) return;
     painted = signature;
     const first = page.total ? offset + 1 : 0;
@@ -150,10 +200,16 @@ async function list(ws, mailbox) {
       : "ว่าง";
     range.textContent = page.total ? `${first}–${last} จาก ${page.total}` : "";
     older.disabled = offset + MAIL_PAGE_SIZE >= page.total;
+    const shown = visible();
+    const moreThanThisPage = offset > 0 || offset + page.messages.length < page.total;
+    filterNote.hidden = !(filter !== "all" && moreThanThisPage);
+    filterNote.textContent = "Filter applies to this page only.";
     rows.replaceChildren(
-      ...(page.messages.length
-        ? page.messages.map(row)
-        : [
+      ...(shown.length
+        ? shown.map(row)
+        : page.messages.length
+          ? [empty("No messages on this page match this filter.", "")]
+          : [
             empty(
               `ไม่มีอีเมลใน ${folderLabel(folder)}`,
               folder === "INBOX"
@@ -207,6 +263,8 @@ async function list(ws, mailbox) {
           button(icon("refresh"), () => load(), "icon", { "aria-label": "โหลดอีเมลใหม่", title: "Refresh" }),
         ),
       ),
+      h("div", { class: "mail-filter-bar" }, chips, filterNote, keysToggle),
+      keysHelp,
       rows,
     ),
     readerPane,
@@ -226,10 +284,74 @@ async function list(ws, mailbox) {
   ws.reloadList = load;
   ws.select = () => {
     ws.readerToken += 1;
+    ws.readerActions = null;
     split.dataset.open = String(!!ws.location.message);
     markCurrent();
     if (ws.location.message) void reader(ws, mailbox);
     else readerPane.replaceChildren(readerEmpty());
+  };
+  // Delete from the open message goes through the same path as the list, so the
+  // next message opens instead of an empty pane.
+  ws.deleteById = (id) => trash(page?.messages.find((item) => item.id === id) || { id });
+  let deleting = false;
+  // Called by the keyboard listener in mail.js. Returns true when it acted.
+  ws.keys = (action) => {
+    const shown = visible();
+    const openId = ws.location.message;
+    const current = page?.messages.find((item) => item.id === openId);
+    const run = (work) =>
+      void Promise.resolve(work).catch((error) =>
+        ws.main.dispatchEvent(new CustomEvent("app-error", { bubbles: true, detail: error })),
+      );
+    switch (action) {
+      case "compose":
+        run(ws.composer.open());
+        return true;
+      case "next":
+      case "prev": {
+        if (!shown.length) return true;
+        const at = shown.findIndex((item) => item.id === openId);
+        const to = at < 0 ? shown[0] : shown[Math.min(shown.length - 1, Math.max(0, at + (action === "next" ? 1 : -1)))];
+        if (to.id !== openId) {
+          ws.show({ message: to.id });
+          rows.querySelector(`[data-message="${CSS.escape(to.id)}"]`)?.scrollIntoView({ block: "nearest" });
+        }
+        return true;
+      }
+      case "reply":
+      case "forward":
+        if (ws.readerActions?.id !== openId || !openId) return false;
+        run(ws.readerActions[action]());
+        return true;
+      case "star":
+        if (!current) return false;
+        run(flag(current, { flagged: !current.flagged }));
+        return true;
+      case "unread":
+        if (!current) return false;
+        run(
+          flag(current, { seen: !current.seen }).then(() => {
+            // Marking a message unread sends you back to the list, like the button does.
+            if (!current.seen && ws.alive(token) && ws.location.message === current.id)
+              ws.show({ message: "" }, { replace: true });
+          }),
+        );
+        return true;
+      case "delete":
+        if (!current) return false;
+        if (!deleting) {
+          deleting = true;
+          run(trash(current).finally(() => { deleting = false; }));
+        }
+        return true;
+      case "close":
+        if (!openId) return false;
+        ws.show({ message: "" });
+        void load(true);
+        return true;
+      default:
+        return false;
+    }
   };
   ws.main.replaceChildren(split);
   ws.listLive = true;
@@ -268,7 +390,7 @@ function messageBody(message, state, repaint) {
           "รูปและเนื้อหาจากภายนอกถูกปิดไว้ เพื่อไม่ให้ผู้ส่งรู้ว่าคุณเปิดอ่าน ",
           button("แสดงรูป", () => { state.images = true; repaint(); }, "small"),
         ),
-      frame,
+      h("div", { class: "mail-frame-card" }, frame),
     ];
   }
   const text = message.text || "";
@@ -331,10 +453,13 @@ async function reader(ws, mailbox) {
       !(await ctx.confirm("ลบอีเมลถาวร?", "อีเมลใน Trash ที่ลบแล้วกู้คืนไม่ได้", "ลบถาวร"))
     )
       return;
+    // The list owns deletion so the next message opens afterwards.
+    if (ws.deleteById) return ws.deleteById(id);
     await ctx.api.delete(messagePath(mailbox, id, folder));
     ctx.toast(folder === "Trash" ? "ลบอีเมลถาวรแล้ว" : "ย้ายไป Trash แล้ว");
     back(true);
   };
+  ws.readerActions = { id, reply: () => compose("reply"), forward: () => compose("forward") };
   const unread = async () => {
     await ctx.api.post(messagePath(mailbox, id, folder, "/flags"), { seen: false });
     back(true);
