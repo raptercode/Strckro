@@ -294,3 +294,46 @@ export function mailShortcut(event) {
   const key = typeof event.key === "string" && event.key.length === 1 ? event.key.toLowerCase() : event.key;
   return Object.hasOwn(SHORTCUT_KEYS, key) ? SHORTCUT_KEYS[key] : null;
 }
+
+// ---- Delivery status of sent mail ----
+
+export const normaliseMessageId = (id) => String(id || "").trim().toLowerCase();
+// Delivery records grouped by Message-ID. One message has one record per recipient.
+export function groupDelivery(records) {
+  const groups = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    const key = normaliseMessageId(record?.messageId);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(record);
+  }
+  return groups;
+}
+const DELIVERY_RANK = { sent: 0, deferred: 1, expired: 2, bounced: 3 };
+const DELIVERY_VIEW = {
+  sent: ["Delivered", "success", "delivered"],
+  deferred: ["Deferred", "warn", "deferred"],
+  bounced: ["Bounced", "danger", "bounced"],
+  expired: ["Expired", "danger", "expired"],
+};
+export const deliveryStatusLabel = (status) => DELIVERY_VIEW[status]?.[0] || String(status || "");
+export const deliveryTone = (status) => DELIVERY_VIEW[status]?.[1] || "neutral";
+// The worst state among a message's records, or null when there are none
+// (a missing record means "unknown", never "failed").
+export function deliverySummary(records) {
+  const list = (records || []).filter((record) => record && DELIVERY_VIEW[record.status]);
+  if (!list.length) return null;
+  const status = list.reduce((worst, record) => (DELIVERY_RANK[record.status] > DELIVERY_RANK[worst] ? record.status : worst), "sent");
+  // One record per recipient: count recipients, not repeated attempts.
+  const recipients = new Set(list.map((record) => record.recipient || record.queueId));
+  const count = new Set(list.filter((record) => record.status === status).map((record) => record.recipient || record.queueId)).size;
+  const total = recipients.size;
+  const [label, tone, word] = DELIVERY_VIEW[status];
+  return {
+    status,
+    tone,
+    count,
+    total,
+    label: status === "sent" || total === 1 ? label : `${count} of ${total} ${word}`,
+  };
+}

@@ -264,3 +264,26 @@ test("mail management labels every delivery reason category and formats queue ag
   assert.equal(queueAge(7200), "2 ชั่วโมง");
   assert.equal(queueAge(3 * 86400), "3 วัน");
 });
+
+test("sent mail delivery: grouping by Message-ID and the worst state", async () => {
+  const { groupDelivery, deliverySummary, deliveryStatusLabel } = await import(
+    "../public/ui/screens/mail/model.js"
+  );
+  const rec = (messageId, recipient, status) => ({ queueId: recipient, messageId, recipient, status });
+  const groups = groupDelivery([
+    rec("<A@x>", "a@y", "sent"),
+    rec(" <a@X> ", "b@y", "bounced"),
+    rec("<A@x>", "c@y", "deferred"),
+    rec(null, "d@y", "sent"),
+    rec("<B@x>", "e@y", "sent"),
+  ]);
+  assert.equal(groups.size, 2);
+  assert.equal(groups.get("<a@x>").length, 3);
+  assert.deepEqual(deliverySummary(groups.get("<a@x>")), { status: "bounced", tone: "danger", count: 1, total: 3, label: "1 of 3 bounced" });
+  assert.equal(deliverySummary(groups.get("<b@x>")).label, "Delivered");
+  assert.equal(deliverySummary([rec("<c>", "a@y", "deferred")]).label, "Deferred");
+  assert.equal(deliverySummary([rec("<c>", "a@y", "deferred"), rec("<c>", "b@y", "expired")]).status, "expired");
+  assert.equal(deliverySummary([]), null);
+  assert.equal(deliverySummary(undefined), null);
+  assert.equal(deliveryStatusLabel("expired"), "Expired");
+});

@@ -1,5 +1,6 @@
 // The mailbox reader: folders, a message list, one open message and a compose window.
-import { h, icon, button, empty, bytes } from "../../core/dom.js";
+import { h, icon, button, empty, bytes, badge } from "../../core/dom.js";
+import { reasonLabel } from "./manage.js";
 import {
   MAIL_FILTERS,
   MAIL_PAGE_SIZE,
@@ -8,13 +9,18 @@ import {
   folderLabel,
   folderShowsRecipients,
   formatMailDate,
+  deliveryStatusLabel,
+  deliverySummary,
+  deliveryTone,
   formatMailDateLong,
+  groupDelivery,
   hasRemoteContent,
   initials,
   linkify,
   mailHref,
   mailHtmlDocument,
   neighbourAfterRemoval,
+  normaliseMessageId,
   personLabel,
   replyDraft,
 } from "./model.js";
@@ -67,6 +73,9 @@ async function list(ws, mailbox) {
   const newer = button(icon("chevron-left"), () => ws.show({ offset: Math.max(0, offset - MAIL_PAGE_SIZE) }), "icon", { "aria-label": "อีเมลที่ใหม่กว่า", title: "ใหม่กว่า", disabled: offset === 0 });
   const rows = h("div", { class: "mail-list", role: "list", "aria-label": folderLabel(folder) });
   let page = null;
+  // Delivery records for Sent, grouped by Message-ID. Null when unavailable.
+  let delivery = null;
+  const deliveryOf = (message) => deliverySummary(delivery?.get(normaliseMessageId(message.messageId)));
   let filter = MAIL_FILTERS.some(([id]) => id === ws.filter) ? ws.filter : "all";
   const filterNote = h("small", { class: "mail-filter-note", hidden: true });
   const chips = h(
@@ -167,6 +176,7 @@ async function list(ws, mailbox) {
         h(
           "span",
           { class: "mail-row-text" },
+          deliveryOf(message) && deliveryBadge(deliveryOf(message)),
           h("b", {}, message.subject || "(ไม่มีหัวข้อ)"),
           message.snippet && h("span", {}, ` — ${message.snippet}`),
         ),
@@ -190,7 +200,11 @@ async function list(ws, mailbox) {
     if (!page) return;
     // The list reloads in the background; identical rows are left alone so a
     // click in progress is never lost to a rebuild.
-    const signature = JSON.stringify([page, filter]);
+    const signature = JSON.stringify([
+      page,
+      filter,
+      page.messages.map((message) => deliveryOf(message)?.label || ""),
+    ]);
     if (signature === painted) return;
     painted = signature;
     const first = page.total ? offset + 1 : 0;
@@ -224,14 +238,24 @@ async function list(ws, mailbox) {
 
   async function load(quiet = false) {
     try {
-      const [, data] = await Promise.all([
+      const [, data, records] = await Promise.all([
         refreshFolders(ws, mailbox, token),
         ctx.api.get(
           `/api/mail/mailboxes/${mailbox.id}/messages?folder=${encodeURIComponent(folder)}&offset=${offset}&limit=${MAIL_PAGE_SIZE}`,
           { ttl: 0, force: true },
         ),
+        // Sent only. Not for everyone (403) and not always available: no badges then.
+        folder === "Sent"
+          ? ctx.api
+              .get(`/api/mail/mailboxes/${mailbox.id}/delivery?limit=100&hours=168`, { ttl: 0, force: true })
+              .then((result) => result.records)
+              .catch(() => null)
+          : null,
       ]);
       if (!ws.alive(token)) return;
+      delivery = records ? groupDelivery(records) : null;
+      ws.delivery = delivery;
+      ws.paintDelivery?.();
       // A page past the end (messages were deleted elsewhere) falls back to the first page.
       if (offset && !data.messages.length && data.total) return ws.show({ offset: 0 }, { replace: true });
       page = data;
@@ -285,6 +309,7 @@ async function list(ws, mailbox) {
   ws.select = () => {
     ws.readerToken += 1;
     ws.readerActions = null;
+    ws.paintDelivery = null;
     split.dataset.open = String(!!ws.location.message);
     markCurrent();
     if (ws.location.message) void reader(ws, mailbox);
@@ -361,6 +386,29 @@ async function list(ws, mailbox) {
   ws.select();
   await load();
 }
+
+const deliveryBadge = (summary) =>
+  h("span", { class: `badge ${summary.tone} mail-delivery-badge`, title: "Delivery status" }, h("i"), summary.label);
+
+// One line per recipient. Server text is put in as text nodes only.
+const deliveryBlock = (records) => [
+  h("small", {}, "Delivery"),
+  h(
+    "ul",
+    { class: "mail-delivery-list" },
+    ...records.map((record) =>
+      h(
+        "li",
+        {},
+        h("span", { class: `badge ${deliveryTone(record.status)}` }, h("i"), deliveryStatusLabel(record.status)),
+        h("span", { class: "mail-delivery-who" }, record.recipient || "(unknown recipient)"),
+        record.status !== "sent" &&
+          h("span", { class: "muted" }, [reasonLabel(record.reasonCategory), record.reasonText ? ` · ${record.reasonText}` : ""].join("")),
+        h("time", { class: "muted", dateTime: record.time }, formatMailDate(record.time)),
+      ),
+    ),
+  ),
+];
 
 const readerEmpty = () =>
   h(
@@ -467,6 +515,15 @@ async function reader(ws, mailbox) {
   const state = { mode: message.html ? "html" : "text", images: false };
   const manyRecipients = (message.to?.length || 0) + (message.cc?.length || 0) > 1;
   const body = h("div", { class: "mail-body" });
+  const deliverySlot = h("section", { class: "mail-delivery", "aria-label": "Delivery", hidden: true });
+  if (folder === "Sent") {
+    ws.paintDelivery = () => {
+      const records = ws.delivery?.get(normaliseMessageId(message.messageId));
+      deliverySlot.hidden = !records?.length;
+      deliverySlot.replaceChildren(...(records?.length ? deliveryBlock(records) : []));
+    };
+    ws.paintDelivery();
+  }
   const paintBody = () => body.replaceChildren(messageBody(message, state, paintBody));
 
   pane.replaceChildren(
@@ -525,6 +582,7 @@ async function reader(ws, mailbox) {
           ),
         ),
       ),
+    deliverySlot,
     body,
     message.attachments?.length > 0 &&
       h(
