@@ -434,6 +434,8 @@ export async function createApplication(options = {}) {
       if (request.method === 'POST' && deployMatch) return await handleProjectDeploy(request, response, deployMatch[1]);
       const restartMatch = url.pathname.match(/^\/api\/projects\/([a-z][a-z0-9-]{0,62})\/restart$/);
       if (request.method === 'POST' && restartMatch) return await handleProjectRestart(request, response, restartMatch[1]);
+      const powerMatch = url.pathname.match(/^\/api\/projects\/([a-z][a-z0-9-]{0,62})\/(stop|start)$/);
+      if (request.method === 'POST' && powerMatch) return await handleProjectPower(request, response, powerMatch[1], powerMatch[2]);
       const autoSyncMatch = url.pathname.match(/^\/api\/projects\/([a-z][a-z0-9-]{0,62})\/auto-sync$/);
       if (request.method === 'POST' && autoSyncMatch) return await handleProjectAutoSync(request, response, autoSyncMatch[1]);
       const githubHookMatch = url.pathname.match(/^\/api\/projects\/([a-z][a-z0-9-]{0,62})\/github-webhook$/);
@@ -1818,6 +1820,10 @@ export async function createApplication(options = {}) {
     if (projectRestarts.has(slug)) throw new InputError('โปรเจคกำลัง Restart รอให้เสร็จแล้วกด Sync latest อีกครั้ง');
     const project = store.snapshot().projects.find((item) => item.slug === slug);
     if (!project?.autoSync?.enabled || project.sync?.status !== 'synced') return null;
+    if (project.service?.enabled === false) {
+      await recordAutoSyncResult(slug, 'blocked', 'Project is turned off. Turn it on before automatic deploy can run.');
+      return { activation: 'blocked', job: null };
+    }
     if (project.serviceType !== 'worker' && !project.environment?.keys?.length) {
       await recordAutoSyncResult(slug, 'blocked', 'Save at least one environment variable before automatic deploy can run.');
       return { activation: 'blocked', job: null };
@@ -2002,12 +2008,13 @@ export async function createApplication(options = {}) {
   }
 
   async function projectRuntimeStatus(project) {
+    if (project.service?.enabled === false) return { state: 'off', checkedAt: new Date().toISOString() };
     if (mode !== 'host' || project.deployment?.state !== 'active' || !project.deployment?.activeReleaseId) return { state: 'unknown' };
     const socketPath = process.env.HOSTMGR_DEPLOY_HELPER_SOCKET;
     if (!socketPath) return { state: 'unknown' };
     try {
       const result = await projectRuntimeProbe({ socketPath, project });
-      if (result?.state === 'active' || result?.state === 'down') return { state: result.state, checkedAt: new Date().toISOString() };
+      if (['active', 'down', 'off'].includes(result?.state)) return { state: result.state, checkedAt: new Date().toISOString() };
     } catch { /* Runtime status is advisory; it must not block the project list. */ }
     return { state: 'unknown' };
   }
@@ -2020,6 +2027,7 @@ export async function createApplication(options = {}) {
     const project = findProject(snapshot, slug);
     if (!project.deployment?.activeReleaseId) throw new InputError('Deploy ให้มี active release ก่อนจึง Restart ได้');
     if (body.releaseId !== undefined && body.releaseId !== project.deployment.activeReleaseId) throw new InputError('Active release เปลี่ยนแล้ว กรุณา Refresh ก่อน Restart');
+    if (project.service?.enabled === false) throw new InputError('Project is turned off. Turn it on before restarting.');
     if (project.runtime === 'docker-compose') throw new InputError('Restart นี้รองรับแอปที่รันด้วย systemd เท่านั้น');
     if (projectRestarts.has(slug) || domainMutations.has(slug) || autoSyncRunning.has(slug) || ['deploying', 'rolling_back', 'awaiting_activation'].includes(project.deployment.state) || snapshot.jobs.some(job => job.projectSlug === slug && ['queued', 'running'].includes(job.status))) throw new InputError('โปรเจคมีงานกำลังทำอยู่ รอให้เสร็จก่อน Restart');
     const releaseId = project.deployment.activeReleaseId;
@@ -2055,11 +2063,64 @@ export async function createApplication(options = {}) {
     }
   }
 
+  // Turn a project's service off or on again. Releases, ENV, storage, domains and Nginx are never touched,
+  // so while it is off the project's domains stay in place and Nginx answers 502.
+  async function handleProjectPower(request, response, slug, action) {
+    if (!requireSession(request, response, true)) return;
+    const body = await readJson(request);
+    const stopping = action === 'stop';
+    if (stopping && body.confirm !== true) throw new InputError('Confirm turning the project off first.');
+    const snapshot = store.snapshot();
+    const project = findProject(snapshot, slug);
+    const releaseId = project.deployment?.activeReleaseId;
+    if (!releaseId) throw new InputError(stopping ? 'Deploy the project before turning it off.' : 'The project has no active release to start. Deploy it first.');
+    if (body.releaseId !== undefined && body.releaseId !== releaseId) throw new InputError('The active release changed. Refresh and try again.');
+    if (projectRestarts.has(slug) || domainMutations.has(slug) || autoSyncRunning.has(slug) || ['deploying', 'rolling_back', 'awaiting_activation'].includes(project.deployment.state) || snapshot.jobs.some(job => job.projectSlug === slug && ['queued', 'running'].includes(job.status))) throw new InputError('The project has another operation running. Wait for it to finish.');
+    const startedAt = new Date().toISOString();
+    const verb = stopping ? 'off' : 'on';
+    projectRestarts.add(slug);
+    const record = async (status, detail) => store.update(state => {
+      const target = findProject(state, slug);
+      const finishedAt = status === 'running' ? null : new Date().toISOString();
+      target.runtimeOperation = { kind: action, status, releaseId, startedAt, finishedAt, detail };
+      if (status === 'succeeded') target.service = stopping ? { enabled: false, stoppedAt: finishedAt } : { enabled: true, startedAt: finishedAt };
+      appendAudit(state, { action: `project.${action}`, outcome: status === 'running' ? 'started' : status === 'succeeded' ? 'success' : 'failure', actor: 'owner', target: slug, detail });
+    });
+    const failure = stopping
+      ? 'The project service could not be turned off. Check the project logs and try again.'
+      : 'The project did not start or did not pass its health check. Check the project logs.';
+    try {
+      await record('running', `Turning the project ${verb}.`);
+      let result;
+      if (mode !== 'host') result = stopping ? { ok: true, state: 'off' } : { ok: true, state: 'active', releaseId };
+      else {
+        const socket = process.env.HOSTMGR_DEPLOY_HELPER_SOCKET;
+        if (!socket) throw new Error('missing helper');
+        result = await projectRestartHelper(socket, { operation: `${action}-project`, slug });
+      }
+      const confirmed = result?.ok && (stopping ? result.state === 'off' : result.state === 'active' && result.releaseId === releaseId);
+      if (!confirmed) {
+        await record('failed', failure);
+        return sendJson(response, 422, { ok: false, error: failure, project: publicProject(findProject(store.snapshot(), slug)) });
+      }
+      await record('succeeded', mode !== 'host' ? `Demo mode: simulated turning the project ${verb}.` : stopping ? 'Project turned off. Domains stay in place and answer 502 until it is turned on.' : 'Project turned on using the active release.');
+      return sendJson(response, 200, { ok: true, project: publicProject(findProject(store.snapshot(), slug)) });
+    } catch {
+      await record('failed', failure);
+      return sendJson(response, 422, { ok: false, error: failure, project: publicProject(findProject(store.snapshot(), slug)) });
+    } finally {
+      projectRestarts.delete(slug);
+      const trigger = autoSyncPending.get(slug);
+      if (trigger) { autoSyncPending.delete(slug); setImmediate(() => { void pollProjectSource(slug, trigger); }); }
+    }
+  }
+
   async function handleProjectDeploy(request, response, slug) {
     if (!requireSession(request, response, true)) return;
     if (domainMutations.has(slug)) throw new InputError('กรุณารอให้ Verify โดเมนเสร็จก่อน deploy');
     const project = store.snapshot().projects.find((item) => item.slug === slug);
     if (!project) throw new InputError('Project was not found.');
+    if (project.service?.enabled === false) throw new InputError('Project is turned off. Turn it on before deploying.');
     if (project.sync?.status !== 'synced') throw new InputError('Sync the repository successfully before deploying.');
     if (project.serviceType !== 'worker' && !project.environment?.keys?.length) throw new InputError('Save at least one project environment variable before deploying.');
     const deployProject = validateDeployProject(project);
@@ -2293,8 +2354,11 @@ export async function createApplication(options = {}) {
         if (project.runtimeOperation?.status !== 'running') continue;
         project.runtimeOperation.status = 'failed';
         project.runtimeOperation.finishedAt = new Date().toISOString();
-        project.runtimeOperation.detail = 'Portal เริ่มใหม่ระหว่าง Restart จึงยังยืนยันผลไม่ได้ ตรวจสถานะและ Logs ก่อนลองใหม่';
-        appendAudit(state, { action: 'project.restart', outcome: 'failure', actor: 'system', target: project.slug, detail: project.runtimeOperation.detail });
+        const powerKind = ['stop', 'start'].includes(project.runtimeOperation.kind) ? project.runtimeOperation.kind : null;
+        project.runtimeOperation.detail = powerKind
+          ? `Portal restarted while turning the project ${powerKind === 'stop' ? 'off' : 'on'}, so the result is unconfirmed. Check the project status and logs before trying again.`
+          : 'Portal เริ่มใหม่ระหว่าง Restart จึงยังยืนยันผลไม่ได้ ตรวจสถานะและ Logs ก่อนลองใหม่';
+        appendAudit(state, { action: `project.${powerKind ?? 'restart'}`, outcome: 'failure', actor: 'system', target: project.slug, detail: project.runtimeOperation.detail });
       }
       for (const job of state.jobs.filter((item) => item.status === 'running')) {
         job.status = 'interrupted';
@@ -2315,6 +2379,7 @@ export async function createApplication(options = {}) {
     const body = await readJson(request);
     const requestedReleaseId = typeof body.releaseId === 'string' ? body.releaseId : null;
     if (requestedReleaseId && !/^[a-f0-9-]{36}$/i.test(requestedReleaseId)) throw new InputError('Release selection is invalid.');
+    if (store.snapshot().projects.find((item) => item.slug === slug)?.service?.enabled === false) throw new InputError('Project is turned off. Turn it on before rolling back.');
     let rollback;
     await store.update((state) => {
       const target = findProject(state, slug);
@@ -3416,7 +3481,7 @@ async function activateOnHost(socketPath, slug, releaseId) {
 
 async function probeProjectRuntime({ socketPath, project }) {
   const result = await callHostHelper(socketPath, { operation: 'project-runtime-status', slug: project.slug });
-  return result.ok && (result.state === 'active' || result.state === 'down') ? { state: result.state } : { state: 'unknown' };
+  return result.ok && ['active', 'down', 'off'].includes(result.state) ? { state: result.state } : { state: 'unknown' };
 }
 
 function findProject(state, slug) {

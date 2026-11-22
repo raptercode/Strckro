@@ -23,7 +23,9 @@ export function callHostHelper(socketPath, request) {
         ? 540_000
         : ['configure-mail', 'sync-project-domains'].includes(request?.operation)
           ? 240_000
-          : 90_000;
+          : request?.operation === 'start-project'
+            ? 240_000
+            : 90_000;
     const timer = setTimeout(() => socket.destroy(new Error('Host helper timed out.')), timeoutMs);
     socket.once('connect', () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on('data', (chunk) => {

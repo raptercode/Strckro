@@ -24,6 +24,8 @@ import {
   progressSummary,
   rollbackConfirmation,
   restartConfirmation,
+  stopConfirmation,
+  isOff,
   runtimeName,
   syncPayload,
   isWorker,
@@ -315,7 +317,9 @@ async function deployPane(ctx, p, root, environment, reloadProject, hooks) {
   });
   const cfg = config.configuration || {};
   const progress = h("div", { class: "progress-line", role: "status" });
+  const offNote = h("div", { class: "notice off-note", role: "status", hidden: true });
   const actions = [];
+  let power = null;
   const busy = () => projectStatus(p).id === "building";
   const guard = () => {
     if (busy())
@@ -354,17 +358,28 @@ async function deployPane(ctx, p, root, environment, reloadProject, hooks) {
           ]
         : []),
     );
+    offNote.hidden = !isOff(p);
+    offNote.textContent = isOff(p)
+      ? "This application is turned off. Its domains answer 502 and deploys are paused until you turn it on."
+      : "";
+    if (power) power.textContent = isOff(p) ? "Turn on" : "Turn off";
     // The button helper re-enables a button when its handler ends; this runs after.
     setTimeout(() => {
       for (const control of actions) {
-        control.disabled = busy();
-        control.title = busy() ? "มีงานกำลังทำอยู่" : "";
+        const blocked = control.dataset.needsOn === "true" && isOff(p);
+        control.disabled = busy() || blocked;
+        control.title = busy()
+          ? "มีงานกำลังทำอยู่"
+          : blocked
+            ? "Turn the application on first"
+            : "";
       }
     }, 0);
   };
   hooks.listen(paint);
   root.append(
     progress,
+    offNote,
     h(
       "dl",
       { class: "key-values" },
@@ -443,6 +458,7 @@ async function deployPane(ctx, p, root, environment, reloadProject, hooks) {
         await settle(true);
       },
       "primary",
+      { "data-needs-on": "true" },
     );
     const restart =
       p.runtime !== "docker-compose" &&
@@ -467,11 +483,41 @@ async function deployPane(ctx, p, root, environment, reloadProject, hooks) {
           // The application is read again even when the request failed.
           await settle();
         }
+      }, "secondary", { "data-needs-on": "true" });
+    // Off keeps releases, ENV, storage and domains; only the running service stops.
+    power =
+      p.deployment?.activeReleaseId &&
+      button(isOff(p) ? "Turn on" : "Turn off", async () => {
+        guard();
+        const turningOff = !isOff(p);
+        if (
+          turningOff &&
+          !(await ctx.confirm(
+            `Turn off ${p.name}?`,
+            stopConfirmation(p),
+            "Turn off",
+          ))
+        )
+          return;
+        try {
+          await ctx.api.post(pathFor(p) + (turningOff ? "/stop" : "/start"), {
+            ...(turningOff ? { confirm: true } : {}),
+            releaseId: p.deployment.activeReleaseId,
+          });
+          ctx.toast(
+            turningOff
+              ? "Application turned off · domains answer 502"
+              : "Application turned on",
+          );
+        } finally {
+          await settle();
+        }
       });
     actions.push(sync, create);
     if (restart) actions.push(restart);
+    if (power) actions.push(power);
     root.append(
-      h("div", { class: "form-actions" }, sync, create, restart),
+      h("div", { class: "form-actions" }, sync, create, restart, power),
     );
   }
   paint(p);

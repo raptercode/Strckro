@@ -105,6 +105,8 @@ async function dispatch(request) {
   if (request.operation === 'install-tool') return installTool(request.tool);
   if (request.operation === 'activate-project') return activateProject(request.slug, request.releaseId);
   if (request.operation === 'restart-project') return restartProject(request.slug, request.releaseId);
+  if (request.operation === 'stop-project') return stopProject(request.slug);
+  if (request.operation === 'start-project') return startProject(request.slug);
   if (request.operation === 'sync-project-domains') return syncProjectDomains(request.slug, request.hosts);
   if (request.operation === 'remove-project-domains') return removeProjectDomains(request.slug);
   if (request.operation === 'delete-project') return deleteProject(request.slug);
@@ -151,6 +153,7 @@ async function readProjectLog(slug, lines) {
 async function projectRuntimeStatus(slug) {
   const project = await loadProject(slug);
   const identity = projectIdentity(slug);
+  if (project.service?.enabled === false) return { state: 'off' };
   if (project.serviceType === 'worker') {
     const state = await readWorkerState(identity);
     return { state: state.active === 'active' && state.substate === 'running' && Number.isInteger(state.pid) && state.pid > 0 ? 'active' : 'down' };
@@ -219,6 +222,7 @@ async function restartProject(slug, releaseId) {
   const project = await loadProject(slug);
   validateReleaseId(releaseId);
   if (project.runtime === 'docker-compose') throw new HelperError('Restart is available for native systemd projects only.');
+  if (project.service?.enabled === false) throw new HelperError('The project is turned off. Turn it on before restarting.');
   if (project.deployment?.activeReleaseId !== releaseId || ['deploying', 'rolling_back', 'awaiting_activation'].includes(project.deployment.state)) throw new HelperError('The active release changed or another deployment operation is running. Refresh before restarting.');
   const identity = projectIdentity(slug);
   const current = await readlink(identity.current).catch(() => null);
@@ -234,6 +238,52 @@ async function restartProject(slug, releaseId) {
       await delay(250);
     }
     throw new HelperError('The restarted process did not pass its configured HTTP health check. Inspect the project logs.');
+  }
+  return { state: 'active', releaseId };
+}
+
+// Owner-initiated off/on. "Off" survives a reboot: systemd units are disabled, Compose
+// containers are removed (images, volumes, releases, ENV, storage and Nginx stay untouched).
+// The unit or Compose project name is always derived from the slug, never from the request.
+async function stopProject(slug) {
+  const project = await loadProject(slug);
+  if (['deploying', 'rolling_back', 'awaiting_activation'].includes(project.deployment?.state)) throw new HelperError('Another deployment operation is running. Wait for it to finish before turning the project off.');
+  const identity = projectIdentity(slug);
+  if (project.runtime === 'docker-compose') {
+    const current = await readlink(identity.current).catch(() => null);
+    if (current) await runDockerCompose(project, current, ['down', '--remove-orphans'], { timeout: 120_000, failure: 'The project containers could not be stopped.' });
+    return { state: 'off' };
+  }
+  // A project that was never activated has no unit to turn off.
+  if (!await exists(identity.unitFile)) return { state: 'off' };
+  await run('/usr/bin/systemctl', ['disable', '--now', identity.service], { failure: 'The project service could not be turned off.' });
+  return { state: 'off' };
+}
+
+async function startProject(slug) {
+  const project = await loadProject(slug);
+  const releaseId = project.deployment?.activeReleaseId;
+  if (!releaseId) throw new HelperError('The project has no active release to start.');
+  validateReleaseId(releaseId);
+  if (['deploying', 'rolling_back', 'awaiting_activation'].includes(project.deployment.state)) throw new HelperError('Another deployment operation is running. Wait for it to finish before turning the project on.');
+  const identity = projectIdentity(slug);
+  const current = await readlink(identity.current).catch(() => null);
+  if (current !== join(identity.releases, releaseId)) throw new HelperError('The installed release does not match the active release. Inspect deployment logs before turning the project on.');
+  if (project.runtime === 'docker-compose') {
+    await runDockerCompose(project, current, ['up', '--detach', '--remove-orphans'], { timeout: 600_000, failure: 'Docker Compose could not start the project.' });
+  } else {
+    await run('/usr/bin/systemctl', ['enable', identity.service], { failure: 'The project systemd service could not be enabled.' });
+    await run('/usr/bin/systemctl', ['start', identity.service], { failure: 'The project service could not be started.' });
+    await checkWorkerProcess(identity);
+  }
+  if (project.serviceType !== 'worker' && project.healthCheckEnabled !== false) {
+    const deadline = Date.now() + 30_000;
+    let healthy = false;
+    while (!healthy && Date.now() < deadline) {
+      healthy = await healthCheck(project.port, project.healthCheckPath ?? '/');
+      if (!healthy) await delay(250);
+    }
+    if (!healthy) throw new HelperError('The started project did not pass its configured HTTP health check. Inspect the project logs.');
   }
   return { state: 'active', releaseId };
 }
@@ -798,6 +848,7 @@ async function optionalSnapshot(read) {
 async function activateProject(slug, releaseId) {
   const project = await loadProject(slug);
   validateReleaseId(releaseId);
+  if (project.service?.enabled === false) throw new HelperError('The project is turned off. Turn it on before deploying.');
   const release = project.deployment?.releases?.find((item) => item.id === releaseId);
   if (!release || !['candidate', 'healthy'].includes(release.status)) throw new HelperError('The requested release is not eligible for activation.');
   if ((release.serviceType ?? 'web') !== (project.serviceType ?? 'web')) throw new HelperError('The release service type does not match this project.');

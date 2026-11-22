@@ -41,3 +41,15 @@ Go เริ่ม binary ที่ build แล้ว ส่วน Python ต�
 ประเภท Web/Worker เปลี่ยนไม่ได้หลังมี release ใด ๆ รวมถึง release ที่ failed; runtime ของ Worker ก็ล็อกเช่นกัน หากต้องเปลี่ยนให้สร้างโปรเจคใหม่ start script/typed Python settings ของ release ถูกใช้เมื่อ rollback
 
 สิทธิ์องค์กร, ENV read/write, deployment queue, audit และ maintenance exclusion ยังตรวจตาม contract เดิม การตรวจ local/Docker และไฟล์ unit ไม่แทนการทดสอบ actual systemd/helper/reboot บน host ดู [acceptance record](../knowledge/plans/v1-acceptance-record.md) ก่อนประกาศ go live
+
+## ปิดและเปิดแอปอีกครั้ง
+
+เปิดแอป แท็บ **Deploy** แล้วกด **Turn off** Portal ขอให้ยืนยัน จากนั้นรัน `systemctl disable --now` กับ unit ของโปรเจคนั้นเอง (โปรเจค Docker Compose ใช้ `docker compose down` โดยไม่ลบ volume หรือ image) ใช้ได้ทั้ง web service และ worker และต้องมีสิทธิ์เดียวกับ Restart
+
+- **ปิดแล้วปิดต่อ** unit ถูก disable แอปจึงไม่กลับมาหลังรีบูต release, ENV, persistent storage, service account และ Nginx config ไม่ถูกแตะ
+- **โดเมนตอบ 502** โดเมนยังตั้งค่าไว้และ Nginx ยังให้บริการอยู่ เมื่อไม่มี process ฟังอยู่ Nginx ตอบ 502 ไม่มีหน้า maintenance
+- **สถานะ** แอปแสดง badge **Off** (สีกลาง ไม่ใช่ *Needs attention*) ในรายการ ภาพรวม และ pipeline track ที่ช่อง **Serving** เป็น *off*
+- **ปฏิเสธ deploy ขณะปิด** Create release, rollback และ Restart ตอบว่า *Project is turned off* และไม่เปลี่ยนอะไร auto deploy บันทึกผลล่าสุดเป็น *blocked* และไม่สร้าง release ต้องเปิดแอปก่อน การลบแอปยังทำได้
+- **Turn on** enable และ start release ที่ active อยู่ แล้วตรวจ process และ HTTP health เหมือน Restart ถ้าตรวจไม่ผ่านแอปยังถูกมองว่าปิดอยู่ และข้อความให้ดู log ของโปรเจค
+
+API: `POST /api/projects/<slug>/stop` (body `{"confirm": true}`) และ `POST /api/projects/<slug>/start` ใช้ session, CSRF token และสิทธิ์ *deploy.start* เหมือน Restart; token ของ `skctl` เรียกไม่ได้ โปรเจคต้องมี active release ก่อนจึงปิด/เปิดได้ ใน demo mode ทั้งสองคำสั่งเป็นการจำลอง ดู [ADR 0035](../knowledge/adr/0035-owner-can-turn-a-project-off-and-on.md)

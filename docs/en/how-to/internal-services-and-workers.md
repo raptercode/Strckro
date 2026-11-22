@@ -41,3 +41,15 @@ Worker cutover includes a short interruption. Applications should handle SIGTERM
 Web/Worker purpose cannot change after any release exists, including failed releases; worker runtime is also locked. Create a separate project to change those fields. Rollback uses the release's start script and typed Python settings.
 
 Organization grants, independent ENV read/write permissions, deployment queues, audit and maintenance exclusion retain their existing contracts. Local/Docker checks and unit rendering do not replace actual systemd/helper/reboot acceptance; see the [acceptance record](../knowledge/plans/v1-acceptance-record.md) before go live.
+
+## Turn an application off and on
+
+Open the application, **Deploy** tab, and use **Turn off**. The Portal asks you to confirm, then runs `systemctl disable --now` on the project's own unit (a Docker Compose project is brought down with `docker compose down`, without removing volumes or images). The control works for web services and workers and needs the same permission as Restart.
+
+- **Off stays off.** The unit is disabled, so the application does not come back after a reboot. Releases, ENV, persistent storage, the service account and Nginx configuration are not touched.
+- **Domains answer 502.** Domains stay configured and Nginx keeps serving them; with nothing listening behind it Nginx returns 502. There is no maintenance page.
+- **Status.** The application shows an **Off** badge (neutral, not *Needs attention*) in the list, the overview and the pipeline track, where **Serving** reads *off*.
+- **Deploys are refused while off.** Create release, rollback and Restart answer *Project is turned off* and change nothing; automatic deploy records *blocked* as its last result and builds no release. Turn the application on first. Deleting the application still works.
+- **Turn on** enables and starts the currently active release and runs the same process and HTTP health checks as Restart. If the check fails the application stays marked off and the error asks you to read the project logs.
+
+API: `POST /api/projects/<slug>/stop` (body `{"confirm": true}`) and `POST /api/projects/<slug>/start` use the session, CSRF token and *deploy.start* permission of Restart; `skctl` tokens cannot call them. A project needs an active release before it can be turned off or on. In demo mode both calls are simulated. See [ADR 0035](../knowledge/adr/0035-owner-can-turn-a-project-off-and-on.md).

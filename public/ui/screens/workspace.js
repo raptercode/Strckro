@@ -84,6 +84,7 @@ const statusOptions = [
   ["ready", "Live"],
   ["building", "In progress"],
   ["down", "Needs attention"],
+  ["off", "Off"],
   ["pause", "Ready to release"],
 ];
 async function applications(ctx) {
@@ -509,7 +510,7 @@ async function overview(ctx) {
   ]);
   if (!ctx.active()) return;
   const projects = projectData.projects || [];
-  const counts = { ready: 0, down: 0, pause: 0, building: 0 };
+  const counts = { ready: 0, down: 0, pause: 0, building: 0, off: 0 };
   projects.forEach((p) => counts[projectStatus(p).id]++);
   root.append(
     h(

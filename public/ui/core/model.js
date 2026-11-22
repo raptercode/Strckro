@@ -143,6 +143,9 @@ export function routeFor(input) {
     ? { id: r[0], module: r[1], group: r[2], master: !!r[3], url }
     : { id: "not-found", group: "workspace", url };
 }
+// True while the owner has turned the application's service off.
+export const isOff = (project) =>
+  project.service?.enabled === false || project.runtimeStatus?.state === "off";
 export function projectStatus(project) {
   const d = project.deployment || {},
     s = project.sync || {},
@@ -158,6 +161,9 @@ export function projectStatus(project) {
       tone: "pending",
       phase: operationLabel(project),
     };
+  // Turned off by the owner on purpose: neutral, not a fault.
+  if (isOff(project))
+    return { id: "off", label: "Off", tone: "neutral" };
   const recovered = recoveredAfterFailure(project);
   if (
     project.runtimeStatus?.state === "down" ||
@@ -229,7 +235,13 @@ export function progressSummary(project) {
 export function operationLabel(project) {
   const operation = project.runtimeOperation;
   if (operation?.status === "running")
-    return operation.kind === "restart" ? "กำลัง restart app" : "กำลังดำเนินการ";
+    return operation.kind === "restart"
+      ? "กำลัง restart app"
+      : operation.kind === "stop"
+        ? "Turning off…"
+        : operation.kind === "start"
+          ? "Turning on…"
+          : "กำลังดำเนินการ";
   const summary = progressSummary(project);
   return summary?.active ? summary.label : "";
 }
@@ -255,6 +267,13 @@ export function restartConfirmation(project) {
   const active = releaseOf(project, project.deployment?.activeReleaseId);
   return `เริ่ม process ใหม่จาก release ${String(project.deployment?.activeReleaseId || "").slice(0, 8)}${active?.revision ? ` · commit ${active.revision.slice(0, 12)}` : ""} แอปจะหยุดชั่วครู่ ใช้ ENV ที่ deploy อยู่เดิม หากแก้ ENV ใหม่ให้ใช้ Deploy เพื่อรัน build ด้วย`;
 }
+// Turning off keeps releases, ENV, storage and domains; only the running service stops.
+export function stopConfirmation(project) {
+  const hosts = project.domains?.hosts?.length
+    ? ` Its domains (${project.domains.hosts.join(", ")}) stay configured and will answer 502 until it is turned on.`
+    : " Its domains, if any, stay configured and will answer 502 until it is turned on.";
+  return `This stops ${project.name} and keeps it off after a reboot.${hosts} Releases, environment and storage are kept, and deploys are paused while it is off.`;
+}
 // The three stations of a release: source → build → serving. Pure, so the
 // list, the overview and the application sheet always agree with each other.
 export function pipelineStages(project) {
@@ -277,8 +296,9 @@ export function pipelineStages(project) {
       : latest
         ? ["ok", "succeeded"]
         : ["idle", "no release yet"];
-  const serving =
-    project.runtimeStatus?.state === "down"
+  const serving = isOff(project)
+    ? ["idle", "off"]
+    : project.runtimeStatus?.state === "down"
       ? ["bad", "down"]
       : d.state === "active" && d.activeReleaseId
         ? ["ok", "live"]

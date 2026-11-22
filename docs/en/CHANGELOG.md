@@ -8,6 +8,8 @@
 - Project SMTP: **Mail → Server → Project SMTP** issues a login for one project that may send only as one From address, shows its password once and writes `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` into the project's encrypted environment for the next deploy. Revoking it, removing its domain or deleting the project removes it.
 - The installer ships a new helper module, `scripts/mail-delivery-log.mjs`.
 - Not verified on a real host: nothing here has run against Postfix, Dovecot or journald. The assumptions to check are listed in ADR 0034.
+- Turn an application (web service or worker) off and on from **Deploy → Turn off / Turn on**, or with `POST /api/projects/<slug>/stop` and `/start` (helper operations `stop-project` and `start-project`). Off means `systemctl disable --now`, so it survives a reboot (Docker Compose: `docker compose down`, keeping volumes and images); releases, ENV, storage, domains and Nginx are untouched and the domains answer 502. While off, Create release, rollback, Restart and automatic deploy are refused or recorded as blocked with "Project is turned off". The list, overview and pipeline track show a neutral **Off** instead of Needs attention. Same permission as Restart; not available to `skctl` tokens. See ADR 0035.
+- Not verified on a real host: nothing here has run against systemd or Docker. The assumptions to check are listed in ADR 0035.
 
 ## 1.1.5 — 2026-11-11
 

@@ -29,3 +29,5 @@ Current operational decisions include [ADR 0020](0020-host-helper-keeps-shadow-u
 [ADR 0033](0033-mail-domains-apply-at-once-and-the-portal-reads-mailboxes.md) amends ADR 0025: a mail domain is applied to a running service at once and its DNS records are reported as health instead of gating configuration, and the Portal reads and sends mail through typed helper operations on Maildir.
 
 [ADR 0034](0034-mail-submission-limits-project-smtp-and-delivery-status.md) adds per-client rate limits and sender checks on submission only, mailbox password changes, delivery status read from the Postfix log in journald, a counts-only queue summary, and project SMTP logins that may send as one address.
+
+[ADR 0035](0035-owner-can-turn-a-project-off-and-on.md) lets the owner turn a project's service off and on again: off is `systemctl disable --now` (Compose: `down`) so it survives a reboot, domains are left alone and answer 502, and deploys, rollback and restart are refused while off.

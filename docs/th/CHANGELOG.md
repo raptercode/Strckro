@@ -10,6 +10,8 @@
 - Project SMTP: **Mail → Server → Project SMTP** ออก login ให้โปรเจคหนึ่งที่ส่งได้เฉพาะในนาม From address เดียว แสดงรหัสผ่านครั้งเดียว และเขียน `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` ลง environment ที่เข้ารหัสของโปรเจคสำหรับ deploy ครั้งถัดไป การ revoke ลบโดเมน หรือลบโปรเจคจะลบ login นี้
 - installer ติดตั้ง helper module ใหม่ `scripts/mail-delivery-log.mjs`
 - ยังไม่ได้ตรวจบน host จริง: ทั้งหมดนี้ยังไม่ได้รันกับ Postfix, Dovecot หรือ journald สิ่งที่ต้องตรวจอยู่ใน ADR 0034
+- ปิดและเปิดแอป (web service หรือ worker) จาก **Deploy → Turn off / Turn on** หรือ `POST /api/projects/<slug>/stop` และ `/start` (helper operation `stop-project` และ `start-project`) การปิดคือ `systemctl disable --now` จึงคงอยู่หลังรีบูต (Docker Compose ใช้ `docker compose down` โดยเก็บ volume และ image) release, ENV, storage, โดเมนและ Nginx ไม่ถูกแตะ และโดเมนตอบ 502 ขณะปิด Create release, rollback, Restart และ auto deploy จะถูกปฏิเสธหรือบันทึกเป็น blocked ด้วยข้อความ "Project is turned off" รายการ ภาพรวม และ pipeline track แสดง **Off** สีกลางแทน Needs attention ใช้สิทธิ์เดียวกับ Restart และ token ของ `skctl` ใช้ไม่ได้ ดู ADR 0035
+- ยังไม่ได้ตรวจบน host จริง: ทั้งหมดนี้ยังไม่ได้รันกับ systemd หรือ Docker สิ่งที่ต้องตรวจอยู่ใน ADR 0035
 
 ## 1.1.5 — 2026-11-11
 
