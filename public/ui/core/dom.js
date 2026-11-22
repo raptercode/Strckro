@@ -78,6 +78,7 @@ const paths = {
     "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9s-1.2 6.5-3.6 9c-2.4-2.5-3.6-5.5-3.6-9S9.6 5.5 12 3",
   "chevron-left": "m15 5-7 7 7 7",
   minus: "M5 12h14",
+  expand: "M15 3h6v6m0-6-7 7M9 21H3v-6m0 6 7-7",
   download: "M12 4v12m0 0-5-5m5 5 5-5M4 20h16",
 };
 export function icon(name) {

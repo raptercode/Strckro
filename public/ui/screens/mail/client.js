@@ -41,7 +41,7 @@ export function inboxView(ws) {
     );
     return;
   }
-  return ws.location.message ? reader(ws, mailbox) : list(ws, mailbox);
+  return list(ws, mailbox);
 }
 
 async function refreshFolders(ws, mailbox, token) {
@@ -78,6 +78,8 @@ async function list(ws, mailbox) {
       return;
     await ctx.api.delete(messagePath(mailbox, message.id, folder));
     ctx.toast(folder === "Trash" ? "ลบอีเมลถาวรแล้ว" : "ย้ายไป Trash แล้ว");
+    // The message that was just deleted must not stay open beside the list.
+    if (ws.location.message === message.id) ws.show({ message: "" }, { replace: true });
     await load();
   };
 
@@ -91,16 +93,26 @@ async function list(ws, mailbox) {
       event.stopPropagation();
       ws.show({ message: message.id });
     };
+    const current = ws.location.message === message.id;
     return h(
       "div",
-      { class: "mail-row" + (message.seen ? "" : " unread"), role: "listitem", "data-message": message.id },
+      {
+        class: "mail-row" + (message.seen ? "" : " unread") + (current ? " current" : ""),
+        role: "listitem",
+        "data-message": message.id,
+      },
       button(icon("star"), () => flag(message, { flagged: !message.flagged }), "icon mail-star" + (message.flagged ? " on" : ""), {
         "aria-label": message.flagged ? "เอาดาวออก" : "ติดดาว",
         "aria-pressed": String(message.flagged),
       }),
       h(
         "a",
-        { class: "mail-row-link", href: mailHref({ ...ws.location, message: message.id }), onclick: open },
+        {
+          class: "mail-row-link",
+          href: mailHref({ ...ws.location, message: message.id }),
+          onclick: open,
+          "aria-current": current ? "true" : null,
+        },
         h("span", { class: "mail-row-who" }, who),
         h(
           "span",
@@ -175,13 +187,16 @@ async function list(ws, mailbox) {
     }
   }
 
-  ws.main.replaceChildren(
+  const readerPane = h("section", { class: "mail-readerpane", "aria-label": "Message" });
+  const split = h(
+    "div",
+    { class: "mail-split", "data-open": String(!!ws.location.message) },
     h(
       "section",
-      { class: "panel mail-panel" },
+      { class: "mail-listpane", "aria-label": folderLabel(folder) },
       h(
         "header",
-        { class: "panel-head" },
+        { class: "mail-pane-head" },
         h("div", {}, title, summary),
         h(
           "div",
@@ -194,12 +209,44 @@ async function list(ws, mailbox) {
       ),
       rows,
     ),
+    readerPane,
   );
+  // Choosing a message only swaps the reader and moves the current mark; the
+  // list itself is neither rebuilt nor fetched again.
+  const markCurrent = () => {
+    for (const item of rows.querySelectorAll(".mail-row")) {
+      const on = item.dataset.message === ws.location.message;
+      item.classList.toggle("current", on);
+      const anchor = item.querySelector(".mail-row-link");
+      if (on) anchor.setAttribute("aria-current", "true");
+      else anchor.removeAttribute("aria-current");
+    }
+  };
+  ws.readerPane = readerPane;
+  ws.reloadList = load;
+  ws.select = () => {
+    ws.readerToken += 1;
+    split.dataset.open = String(!!ws.location.message);
+    markCurrent();
+    if (ws.location.message) void reader(ws, mailbox);
+    else readerPane.replaceChildren(readerEmpty());
+  };
+  ws.main.replaceChildren(split);
+  ws.listLive = true;
   rows.replaceChildren(loading("กำลังโหลดอีเมล…"));
   // New mail shows up by itself while the first page is open.
   ws.tick = offset === 0 ? () => load(true) : null;
+  ws.select();
   await load();
 }
+
+const readerEmpty = () =>
+  h(
+    "div",
+    { class: "mail-reader-empty" },
+    icon("mail"),
+    h("p", {}, "Select a message to read it"),
+  );
 
 function messageBody(message, state, repaint) {
   if (message.html && state.mode === "html") {
@@ -242,18 +289,21 @@ async function reader(ws, mailbox) {
   const { ctx } = ws;
   const token = ws.token;
   const { folder, message: id } = ws.location;
-  const back = (replace = false) => ws.show({ message: "" }, { replace });
+  const reading = ws.readerToken;
+  const live = () => ws.readerAlive(token, reading);
+  const back = (replace = false) => {
+    ws.show({ message: "" }, { replace });
+    // The list shows flags and rows that this message may have changed.
+    void ws.reloadList?.(true);
+  };
   const backButton = button([icon("back"), h("span", {}, folderLabel(folder))], () => back(), "ghost");
   const pane = h("div", { class: "mail-reader" }, loading("กำลังเปิดอีเมล…"));
-  ws.tick = null;
-  ws.main.replaceChildren(
-    h("section", { class: "panel mail-panel" }, h("header", { class: "panel-head" }, backButton), pane),
-  );
+  ws.readerPane.replaceChildren(h("header", { class: "mail-reader-bar" }, backButton), pane);
   let message;
   try {
     message = (await ctx.api.get(messagePath(mailbox, id, folder), { ttl: 0, force: true })).message;
   } catch (error) {
-    if (!ws.alive(token)) return;
+    if (!live()) return;
     pane.replaceChildren(
       error.status === 404
         ? empty("ไม่พบอีเมลนี้", "อาจถูกย้ายหรือลบจากโปรแกรมอีเมลอื่นแล้ว", button(`กลับไป ${folderLabel(folder)}`, () => back(true), "primary"))
@@ -261,11 +311,11 @@ async function reader(ws, mailbox) {
     );
     return;
   }
-  if (!ws.alive(token)) return;
+  if (!live()) return;
   if (!message.seen)
     void ctx.api
       .post(messagePath(mailbox, id, folder, "/flags"), { seen: true })
-      .then(() => refreshFolders(ws, mailbox, token))
+      .then(() => ws.reloadList?.(true))
       .catch(() => {});
 
   const own = addressOf(mailbox);
@@ -473,6 +523,10 @@ export function createComposer(ws) {
           "div",
           { class: "actions" },
           button(icon("minus"), () => form.toggleAttribute("data-minimized"), "icon", { "aria-label": "ย่อหรือขยายหน้าต่างเขียนอีเมล" }),
+          button(icon("expand"), () => {
+            form.removeAttribute("data-minimized");
+            form.toggleAttribute("data-expanded");
+          }, "icon compose-expand", { "aria-label": "Expand compose window", title: "Expand" }),
           button(icon("close"), () => discard(), "icon", { "aria-label": "ปิดและทิ้งอีเมล" }),
         ),
       ),

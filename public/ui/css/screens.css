@@ -416,19 +416,51 @@ a.stat:hover::after {
 }
 
 /* ── Mail ────────────────────────────────────────────────────────────── */
-/* A mailbox beside its own navigation. The signal colour marks unread mail. */
+/* The mailbox is an app: it fills the viewport under the top bar and its panes
+   scroll on their own. The signal colour marks unread mail and the primary action. */
+#content[data-fill="mail"] {
+  padding: 0;
+}
+.screen.mail-fill {
+  max-width: none;
+  height: calc(100dvh - var(--strip-h));
+  margin: 0;
+  animation: none;
+}
+.mail-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .mail-app {
+  container: mail / inline-size;
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
+  grid-template-columns: 210px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--card);
+}
+.mail-app[data-mode="settings"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mail-app[data-mode="settings"] .mail-side {
+  display: none;
 }
 .mail-side {
-  position: sticky;
-  top: calc(var(--strip-h) + 18px);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-width: 0;
+  min-height: 0;
+  padding: 14px 10px 12px;
+  overflow: auto;
+  border-right: 1px solid var(--rule);
+  background: var(--paper);
+  scrollbar-width: thin;
 }
 .mail-compose-button {
   justify-content: flex-start;
@@ -451,13 +483,10 @@ a.stat:hover::after {
   display: grid;
   gap: 2px;
 }
-.mail-nav-label {
-  margin-top: 6px;
-  padding: 0 10px;
-  color: var(--ink-3);
-  font: 500 10.5px/1 var(--font-mono);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.mail-nav-foot {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
 }
 .mail-nav-item {
   display: flex;
@@ -506,19 +535,182 @@ a.stat:hover::after {
   background: var(--warn);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
 }
-.mail-main {
+.mail-stage {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
-.mail-panel .panel-head {
-  min-height: 58px;
-  padding-block: 10px;
+.mail-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
-.mail-panel .panel-head .btn.ghost {
+.mail-app[data-mode="mail"] .mail-main > .panel {
+  margin: 24px;
+}
+
+/* Settings: Domains, Mailboxes and Server take the place of list and reader. */
+.mail-settings-head {
+  display: none;
+}
+.mail-app[data-mode="settings"] .mail-settings-head {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+.mail-back {
   margin-left: -8px;
+}
+.mail-tabs {
+  display: flex;
+  gap: 2px;
+}
+.mail-tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.mail-tab .i {
+  color: var(--ink-3);
+}
+.mail-tab:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--ink);
+}
+.mail-tab[aria-current="page"] {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+.mail-tab[aria-current="page"] .i {
+  color: var(--ink);
+}
+.mail-tab .mail-nav-alert {
+  margin-left: 2px;
+}
+.mail-app[data-mode="settings"] .mail-main {
+  display: block;
+  padding: 24px clamp(16px, 3vw, 40px) 40px;
+  overflow: auto;
+}
+.mail-app[data-mode="settings"] .mail-main > * {
+  max-width: 1040px;
+  margin-inline: auto;
+}
+.mail-app[data-mode="settings"] .mail-main > * + * {
+  margin-top: 16px;
+}
+
+/* List and reader. Narrow: one of the two. Wide: side by side. */
+.mail-split {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+.mail-listpane,
+.mail-readerpane {
+  min-width: 0;
+  min-height: 0;
+}
+.mail-listpane {
+  display: flex;
+  flex-direction: column;
+}
+.mail-readerpane {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  background: var(--card);
+}
+.mail-pane-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 14px 8px 18px;
+  border-bottom: 1px solid var(--rule);
+}
+.mail-pane-head h2 {
+  font-size: 15px;
+}
+.mail-pane-head small {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.mail-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 .mail-list > .skeleton {
   padding: 20px;
 }
+.mail-list > .empty {
+  padding-block: 56px;
+}
+.mail-reader-bar {
+  display: flex;
+  flex: none;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.mail-reader-bar .btn.ghost {
+  margin-left: -4px;
+}
+.mail-reader-empty {
+  display: grid;
+  flex: 1;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 40px 24px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+.mail-reader-empty .i {
+  width: 40px;
+  height: 40px;
+  stroke-width: 1.2;
+}
+@container mail (max-width: 1099px) {
+  .mail-split[data-open="true"] > .mail-listpane,
+  .mail-split[data-open="false"] > .mail-readerpane {
+    display: none;
+  }
+}
+@container mail (min-width: 1100px) {
+  .mail-split {
+    grid-template-columns: clamp(360px, 34%, 420px) minmax(0, 1fr);
+  }
+  .mail-listpane {
+    border-right: 1px solid var(--rule);
+  }
+  .mail-reader-bar,
+  .mail-pane-head .collection-count {
+    display: none;
+  }
+  .mail-pane-head {
+    padding-left: 14px;
+  }
+}
+
+/* Rows */
 .mail-row {
   position: relative;
   display: grid;
@@ -548,6 +740,11 @@ a.stat:hover::after {
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: var(--signal-edge);
+}
+/* The open message is marked with ink, not with the signal colour. */
+.mail-row.current {
+  background: color-mix(in srgb, var(--ink) 8%, var(--card));
+  box-shadow: inset 2px 0 0 var(--ink);
 }
 .mail-row-link {
   display: grid;
@@ -606,10 +803,67 @@ a.stat:hover::after {
 .mail-star.on .i {
   fill: currentColor;
 }
+/* Two lines: sender and time, then subject and snippet. Used wherever the
+   list is narrow: beside the reader, and alone on a phone. */
+@container mail (min-width: 1100px) or (max-width: 760px) {
+  .mail-row {
+    align-items: stretch;
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+  .mail-row .mail-star {
+    align-self: start;
+    margin-top: 7px;
+  }
+  .mail-row-link {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 3px 8px;
+    padding: 11px 4px 11px 2px;
+  }
+  .mail-row-who {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .mail-row-clip {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .mail-row-date {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .mail-row-text {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .mail-row-actions {
+    position: absolute;
+    right: 8px;
+    bottom: 6px;
+    width: auto;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--r-md);
+    background: var(--card-raised);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .mail-row:hover .mail-row-actions,
+  .mail-row:focus-within .mail-row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Reader */
 .mail-reader {
-  display: grid;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
   gap: 18px;
-  padding: 22px 24px 26px;
+  min-width: 0;
+  padding: 22px 28px 26px;
+}
+.mail-reader > * {
+  flex: none;
 }
 .mail-reader-head {
   display: flex;
@@ -654,10 +908,14 @@ a.stat:hover::after {
   white-space: nowrap;
 }
 .mail-mode {
-  justify-self: start;
+  align-self: flex-start;
+}
+.mail-reader > .mail-body {
+  flex: 1 0 auto;
 }
 .mail-body {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-width: 0;
 }
@@ -668,11 +926,13 @@ a.stat:hover::after {
   justify-content: space-between;
   gap: 10px;
 }
-/* The sender's markup stays in its own white page, whatever the theme. */
+/* The sender's markup stays in its own white page, whatever the theme. It
+   takes whatever height the reading pane has left. */
 .mail-frame {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
-  height: max(420px, calc(100dvh - 360px));
+  min-height: 420px;
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
   background: #fff;
@@ -721,6 +981,8 @@ a.stat:hover::after {
 .mail-file .i {
   color: var(--ink-3);
 }
+
+/* Compose docks bottom-right like a chat window; expanded it is centred. */
 .mail-compose {
   position: fixed;
   right: 24px;
@@ -729,7 +991,7 @@ a.stat:hover::after {
   display: flex;
   flex-direction: column;
   width: min(560px, calc(100vw - 32px));
-  max-height: min(680px, calc(100dvh - var(--strip-h) - 24px));
+  height: min(600px, 80dvh);
   overflow: hidden;
   border: 1px solid var(--rule-strong);
   border-bottom: 0;
@@ -737,8 +999,22 @@ a.stat:hover::after {
   background: var(--card-raised);
   box-shadow: var(--shadow-pop);
 }
+.mail-compose[data-minimized] {
+  height: auto;
+}
+.mail-compose[data-expanded]:not([data-minimized]) {
+  right: auto;
+  bottom: 5dvh;
+  left: 50%;
+  width: min(860px, calc(100vw - 48px));
+  height: min(760px, 90dvh);
+  border-bottom: 1px solid var(--rule-strong);
+  border-radius: var(--r-lg);
+  transform: translateX(-50%);
+}
 .compose-head {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -766,6 +1042,7 @@ a.stat:hover::after {
 }
 .compose-line {
   display: grid;
+  flex: none;
   grid-template-columns: 62px minmax(0, 1fr);
   align-items: center;
   padding: 0 16px;
@@ -796,6 +1073,7 @@ a.stat:hover::after {
 }
 .compose-to {
   position: relative;
+  flex: none;
 }
 .compose-to > .btn {
   position: absolute;
@@ -807,13 +1085,14 @@ a.stat:hover::after {
 }
 .mail-compose textarea {
   flex: 1;
-  min-height: 220px;
+  min-height: 160px;
   padding: 14px 16px;
   line-height: 1.7;
   resize: none;
 }
 .compose-foot {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 12px;
   padding: 10px 12px 12px 16px;
@@ -985,36 +1264,6 @@ a.stat:hover::after {
   color: var(--ink-3);
 }
 @media (max-width: 1040px) {
-  .mail-app {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
-  }
-  .mail-side {
-    position: static;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-  }
-  .mail-account,
-  .mail-account-name {
-    justify-self: end;
-    max-width: 280px;
-  }
-  .mail-nav {
-    grid-column: 1 / -1;
-    display: flex;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .mail-nav-item {
-    flex: none;
-  }
-  .mail-nav-count,
-  .mail-nav-alert {
-    margin-left: 0;
-  }
-  .mail-nav-label {
-    display: none;
-  }
   .dns-record {
     grid-template-columns: 64px minmax(0, 1fr);
   }
@@ -1024,44 +1273,6 @@ a.stat:hover::after {
   }
 }
 @media (max-width: 650px) {
-  .mail-row-link {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 2px 10px;
-    padding-block: 9px;
-  }
-  .mail-row-who {
-    grid-column: 1;
-  }
-  .mail-row-text {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
-  .mail-row-actions {
-    display: none;
-  }
-  .mail-reader {
-    padding: 18px 16px 22px;
-  }
-  .mail-meta {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .mail-meta time {
-    grid-column: 2;
-    white-space: normal;
-  }
-  .mail-frame {
-    height: max(380px, calc(100dvh - 300px));
-  }
-  .mail-compose {
-    right: 0;
-    width: 100vw;
-    max-height: calc(100dvh - var(--strip-h));
-    border-inline: 0;
-    border-radius: 0;
-  }
-  .mail-compose:not([data-minimized]) {
-    top: var(--strip-h);
-  }
   .domain-item > summary {
     grid-template-columns: 16px minmax(0, 1fr) auto;
     padding-inline: 16px;
@@ -1077,6 +1288,126 @@ a.stat:hover::after {
     grid-template-columns: minmax(0, 1fr);
   }
   .address-field > span {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .mail-app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .mail-app[data-mode="settings"] {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  /* One row: mailbox, folders and settings scroll sideways together. */
+  .mail-side {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    overflow: auto hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    scrollbar-width: none;
+  }
+  .mail-side::-webkit-scrollbar {
+    display: none;
+  }
+  .mail-nav,
+  .mail-nav-foot {
+    display: contents;
+  }
+  .mail-account {
+    flex: none;
+    width: auto;
+    max-width: 190px;
+    min-height: 34px;
+  }
+  .mail-account-name {
+    display: none;
+  }
+  .mail-nav-item {
+    flex: none;
+    height: 34px;
+    padding: 0 12px;
+    gap: 7px;
+    border: 1px solid var(--rule);
+    border-radius: 99px;
+  }
+  .mail-nav-item[aria-current="page"] {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--on-ink);
+  }
+  .mail-nav-item[aria-current="page"] .i {
+    color: inherit;
+  }
+  .mail-nav-count,
+  .mail-nav-alert {
+    margin-left: 0;
+  }
+  .mail-compose-button {
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    z-index: 30;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    min-height: 0;
+    padding: 0;
+    border-radius: 50%;
+    box-shadow: var(--shadow-pop);
+  }
+  .mail-compose-button > span {
+    display: none;
+  }
+  .mail-settings-head {
+    padding: 8px 12px;
+    gap: 8px 12px;
+  }
+  .mail-tabs {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .mail-app[data-mode="settings"] .mail-main {
+    padding: 14px 12px 28px;
+  }
+  .mail-pane-head {
+    padding-left: 14px;
+  }
+  .mail-reader {
+    gap: 14px;
+    padding: 16px 16px 22px;
+  }
+  .mail-meta {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .mail-meta time {
+    grid-column: 2;
+    white-space: normal;
+  }
+  .mail-row-actions {
+    display: none;
+  }
+  .mail-compose {
+    top: var(--strip-h);
+    right: 0;
+    width: 100vw;
+    height: auto;
+    border-inline: 0;
+    border-radius: 0;
+  }
+  .mail-compose[data-minimized] {
+    top: auto;
+  }
+  .mail-compose[data-expanded]:not([data-minimized]) {
+    left: 0;
+    width: 100vw;
+    transform: none;
+  }
+  .compose-expand {
     display: none;
   }
 }

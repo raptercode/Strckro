@@ -43,8 +43,22 @@ async function workspace(ctx) {
     return;
   }
 
+  // The mailbox is an app, not a page: it takes the viewport under the top bar.
+  // The class lives on this screen's own root, and the attribute on the shared
+  // container is removed by onDispose, so no other screen inherits the layout.
+  const container = ctx.root.parentElement;
+  ctx.root.classList.add("mail-fill");
+  if (container) {
+    container.dataset.fill = "mail";
+    ctx.onDispose(() => {
+      if (container.dataset.fill === "mail") delete container.dataset.fill;
+    });
+  }
+
   const side = h("aside", { class: "mail-side", "aria-label": "Mail" });
+  const settingsHead = h("header", { class: "mail-settings-head" });
   const main = h("section", { class: "mail-main" });
+  const app = h("div", { class: "mail-app", "data-mode": "mail" }, side, h("div", { class: "mail-stage" }, settingsHead, main));
   const ws = {
     ctx,
     data,
@@ -52,9 +66,17 @@ async function workspace(ctx) {
     folders: [],
     location: mailLocation(ctx.route.url),
     token: 0,
+    // The open message has its own token: choosing another message must not
+    // rebuild the list, only retire the reader that is still loading.
+    readerToken: 0,
     tick: null,
+    // Set while a message list is on screen and can swap its reader in place.
+    listLive: false,
+    select: null,
+    reloadList: null,
     // A view checks this after every await: the reader may have moved on meanwhile.
     alive: (token) => ctx.active() && token === ws.token,
+    readerAlive: (token, reader) => ws.alive(token) && reader === ws.readerToken,
     mailbox: () => {
       const boxes = ws.data.mail.mailboxes;
       return boxes.find((box) => box.id === ws.location.box) || boxes[0] || null;
@@ -69,10 +91,16 @@ async function workspace(ctx) {
       if ("folder" in patch || "box" in patch || "view" in patch)
         Object.assign(next, { offset: patch.offset || 0, message: patch.message || "" });
       if (next.view !== "inbox") Object.assign(next, { message: "" });
+      // Opening or closing a message inside the same list keeps the list as it is.
+      const inPlace =
+        ws.listLive &&
+        ws.location.view === "inbox" &&
+        next.view === "inbox" &&
+        ["box", "folder", "offset"].every((key) => next[key] === ws.location[key]);
       ws.location = next;
       ctx.locate(mailHref(next), { replace });
-      render();
-      window.scrollTo(0, 0);
+      if (inPlace) ws.select();
+      else render();
     },
   };
   ws.sidebar = sidebar;
@@ -97,15 +125,30 @@ async function workspace(ctx) {
     return item;
   };
 
+  const tab = (name, label, patch, { current, alert } = {}) => {
+    const item = h(
+      "a",
+      { class: "mail-tab", href: mailHref({ ...ws.location, message: "", offset: 0, ...patch }), onclick: go(patch) },
+      icon(name),
+      h("span", {}, label),
+      alert && h("i", { class: "mail-nav-alert", title: alert }),
+    );
+    if (current) item.setAttribute("aria-current", "page");
+    return item;
+  };
+
   let painted = "";
   function sidebar() {
     const mail = ws.data.mail;
     const { view, folder } = ws.location;
     const mailbox = ws.mailbox();
+    const settings = view !== "inbox";
+    app.dataset.mode = settings ? "settings" : "mail";
     const standard = ["INBOX", "Sent", "Drafts", "Junk", "Trash"];
     const known = new Map(ws.folders.map((item) => [item.id, item]));
     const folderIds = [...standard, ...ws.folders.map((item) => item.id).filter((id) => !standard.includes(id))];
     const unhealthy = mail.domains.filter((item) => domainHealth(item).id !== "ready").length;
+    const alert = unhealthy ? `${unhealthy} โดเมนยังตั้ง DNS ไม่ครบ` : "";
     // Counts are refreshed in the background. Rebuilding identical links would
     // swallow a click that lands between a press and its release.
     const signature = JSON.stringify([view, folder, mailbox?.id, mail.mailboxes.map((box) => box.id), ws.folders, unhealthy]);
@@ -114,7 +157,13 @@ async function workspace(ctx) {
     side.replaceChildren(
       h(
         "button",
-        { type: "button", class: "btn primary mail-compose-button", disabled: !mailbox, onclick: () => ws.composer.open() },
+        {
+          type: "button",
+          class: "btn primary mail-compose-button",
+          "aria-label": "Compose",
+          disabled: !mailbox,
+          onclick: () => ws.composer.open(),
+        },
         icon("edit"),
         h("span", {}, "Compose"),
       ),
@@ -142,23 +191,40 @@ async function workspace(ctx) {
           }),
         ),
       ),
-      h("span", { class: "mail-nav-label" }, "Manage"),
       h(
         "nav",
-        { class: "mail-nav", "aria-label": "Mail management" },
-        entry("globe", "Domains", { view: "domains" }, {
-          current: view === "domains",
-          alert: unhealthy ? `${unhealthy} โดเมนยังตั้ง DNS ไม่ครบ` : "",
-        }),
-        entry("users", "Mailboxes", { view: "mailboxes" }, { current: view === "mailboxes" }),
-        entry("server", "Server", { view: "server" }, { current: view === "server" }),
+        { class: "mail-nav mail-nav-foot", "aria-label": "Settings" },
+        entry("settings", "Mail settings", { view: "domains" }, { alert }),
+      ),
+    );
+    settingsHead.replaceChildren(
+      h(
+        "a",
+        {
+          class: "btn ghost mail-back",
+          href: mailHref({ ...ws.location, view: "inbox", message: "", offset: 0 }),
+          onclick: go({ view: "inbox" }),
+        },
+        icon("back"),
+        h("span", {}, "Back to mail"),
+      ),
+      h(
+        "nav",
+        { class: "mail-tabs", "aria-label": "Mail settings" },
+        tab("globe", "Domains", { view: "domains" }, { current: view === "domains", alert }),
+        tab("users", "Mailboxes", { view: "mailboxes" }, { current: view === "mailboxes" }),
+        tab("server", "Server", { view: "server" }, { current: view === "server" }),
       ),
     );
   }
 
   function render() {
     ws.token += 1;
+    ws.readerToken += 1;
     ws.tick = null;
+    ws.listLive = false;
+    ws.select = null;
+    ws.reloadList = null;
     sidebar();
     const { view } = ws.location;
     if (view === "domains") domainsView(ws);
@@ -167,10 +233,8 @@ async function workspace(ctx) {
     else void inboxView(ws);
   }
 
-  ctx.root.replaceChildren(
-    heading("Mail", "อ่านและส่งอีเมลของทุก mailbox พร้อมจัดการโดเมนจากที่เดียว"),
-    h("div", { class: "mail-app" }, side, main),
-  );
+  // The page heading is kept for assistive technology and the document title only.
+  ctx.root.replaceChildren(h("h1", { class: "mail-title" }, "Mail"), app);
   render();
   // The unread count belongs in the sidebar on every view, not only on the inbox.
   if (ws.location.view !== "inbox" && ws.mailbox())
