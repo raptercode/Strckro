@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.3.0 — 2026-11-23
+
+- Refresh the light theme and Mail workspace with a full-height three-pane mailbox, tabbed settings, a docked compose window, mailbox shortcuts and filters, and a live setup checklist.
+- Retry Certbot when another process holds its lock, reuse valid project certificates, and repair project ownership only when needed.
 - Limit authenticated submission (port 587) per client address: 10 connections at once, 60 connections, sign-ins and messages and 300 recipients a minute, 100 recipients per message. Port 25 keeps Postfix defaults and no longer offers sign-in. A signed-in client may send only as an address its login owns. Existing hosts get this with **Mail → Server → Apply configuration again** ([ADR 0034](knowledge/adr/0034-mail-submission-limits-project-smtp-and-delivery-status.md)).
 - Change a mailbox password from **Mail → Mailboxes → Change password**, with the same policy and generator as a new mailbox (helper operation `set-mailbox-password`).
 - Delivery status of mail a mailbox sent (`GET /api/mail/mailboxes/<id>/delivery`), read from the Postfix log in journald and limited to that mailbox's own messages, and a counts-only queue summary (`GET /api/mail/queue`) shown on **Mail → Server**. The sandbox simulates both from the Sent folder.

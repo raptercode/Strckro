@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 1.3.0 — 2026-11-23
+
+- ปรับธีมสว่างและหน้า Mail เป็น mailbox สามคอลัมน์เต็มความสูง แยกการตั้งค่าเป็นแท็บ เปิดหน้าต่างเขียนอีเมลที่ด้านล่าง เพิ่มทางลัดและตัวกรอง mailbox และแสดงการตั้งค่าเป็น checklist ที่อัปเดตระหว่างทำงาน
+- ลอง Certbot ซ้ำเมื่อมี process อื่นล็อกอยู่ ใช้ certificate ของโปรเจคเดิมที่ยังใช้ได้ และซ่อมเจ้าของไฟล์โปรเจคเฉพาะเมื่อจำเป็น
 - จำกัดอัตราการส่งที่เข้าระบบแล้วบน submission (พอร์ต 587) ต่อที่อยู่ client: เชื่อมต่อพร้อมกัน 10, ต่อนาที 60 การเชื่อมต่อ 60 การเข้าระบบ 60 ข้อความ และ 300 ผู้รับ, 100 ผู้รับต่อข้อความ พอร์ต 25 ใช้ค่าเริ่มต้นของ Postfix และไม่เปิดให้เข้าระบบอีก client ที่เข้าระบบส่งได้เฉพาะที่อยู่ที่ login ของตัวเองเป็นเจ้าของ host เดิมได้ค่านี้เมื่อกด **Mail → Server → Apply configuration again** ([ADR 0034](knowledge/adr/0034-mail-submission-limits-project-smtp-and-delivery-status.md))
 - เปลี่ยนรหัสผ่าน mailbox ได้ที่ **Mail → Mailboxes → Change password** ใช้ policy และตัวสร้างรหัสผ่านเดียวกับการสร้าง mailbox (helper operation `set-mailbox-password`)
 - สถานะการส่งของอีเมลที่ mailbox ส่ง (`GET /api/mail/mailboxes/<id>/delivery`) อ่านจาก log ของ Postfix ใน journald และจำกัดเฉพาะข้อความของ mailbox นั้น และสรุปคิวแบบนับจำนวน (`GET /api/mail/queue`) แสดงที่ **Mail → Server** sandbox จำลองทั้งสองอย่างจากโฟลเดอร์ Sent
