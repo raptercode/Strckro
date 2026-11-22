@@ -37,7 +37,9 @@ import { MailStoreError, createHelperMailStore, createLocalMailStore } from './m
 import { MAIL_LIST_LIMIT, MAIL_LIST_MAX } from '../scripts/maildir-store.mjs';
 import { DATABASE_PROVIDERS, probeDatabaseConnection, publicDatabaseConnection, validateDatabaseConnectionInput } from './db-connectors.mjs';
 import { scanProjectRuntimeDirectory } from './project-runtime.mjs';
-import { buildMailPortPlan, demoInboundMailReadiness } from '../scripts/mail-host-config.mjs';
+import { MAIL_CONFIG_VERSION, MAIL_SUBMISSION_LIMITS, buildMailPortPlan, demoInboundMailReadiness, submissionLogin } from '../scripts/mail-host-config.mjs';
+import { DELIVERY_HOURS_DEFAULT, DELIVERY_HOURS_MAX, DELIVERY_LIMIT_DEFAULT, DELIVERY_LIMIT_MAX, normalizeDeliveryReport, normalizeQueueSummary } from '../scripts/mail-delivery-log.mjs';
+import { simulateDeliveryRecords, simulateQueueSummary } from './mail-delivery-sandbox.mjs';
 import { migrateAccessState, publicUser, visibleOrganizations, canAccess, permissionsFor, resolveProjectOrganization } from './access.mjs';
 import { AccessError, handleAccessApi } from './access-api.mjs';
 import { authorizeRequest } from './authorization.mjs';
@@ -520,6 +522,13 @@ export async function createApplication(options = {}) {
       if (request.method === 'POST' && url.pathname === '/api/mail/mailboxes') return await handleMailboxCreate(request, response);
       const mailboxMatch = url.pathname.match(/^\/api\/mail\/mailboxes\/([a-f0-9-]{36})$/i);
       if (request.method === 'DELETE' && mailboxMatch) return await handleMailboxDelete(request, response, mailboxMatch[1]);
+      const mailboxAccountMatch = url.pathname.match(/^\/api\/mail\/mailboxes\/([a-f0-9-]{36})\/(password|delivery)$/i);
+      if (request.method === 'POST' && mailboxAccountMatch?.[2] === 'password') return await handleMailboxPassword(request, response, mailboxAccountMatch[1]);
+      if (request.method === 'GET' && mailboxAccountMatch?.[2] === 'delivery') return await handleMailDelivery(request, response, mailboxAccountMatch[1], url);
+      if (request.method === 'GET' && url.pathname === '/api/mail/queue') return await handleMailQueue(request, response);
+      if (request.method === 'POST' && url.pathname === '/api/mail/smtp-credentials') return await handleSmtpCredentialCreate(request, response);
+      const smtpCredentialMatch = url.pathname.match(/^\/api\/mail\/smtp-credentials\/([a-f0-9-]{36})$/i);
+      if (request.method === 'DELETE' && smtpCredentialMatch) return await handleSmtpCredentialDelete(request, response, smtpCredentialMatch[1]);
       const mailboxViewMatch = url.pathname.match(/^\/api\/mail\/mailboxes\/([a-f0-9-]{36})\/(folders|messages|send)$/i);
       if (request.method === 'GET' && mailboxViewMatch?.[2] === 'folders') return await handleMailFolders(request, response, mailboxViewMatch[1]);
       if (request.method === 'GET' && mailboxViewMatch?.[2] === 'messages') return await handleMailMessageList(request, response, mailboxViewMatch[1], url);
@@ -888,8 +897,15 @@ export async function createApplication(options = {}) {
               : null
           };
         }),
-        mailboxes: mail.mailboxes ?? []
+        mailboxes: mail.mailboxes ?? [],
+        // A host configured before the current generated configuration lacks the
+        // submission limits and sender checks until it is applied again.
+        configCurrent: mail.configure?.status === 'configured' && (mode !== 'host' || (mail.configure.configVersion ?? 1) >= MAIL_CONFIG_VERSION),
+        smtpCredentials: (mail.submissionCredentials ?? []).map(publicSmtpCredential),
+        smtpBlocked: smtpCredentialBlocker(mail)
       },
+      projects: snapshot.projects.map((project) => ({ slug: project.slug, name: project.name ?? project.slug })),
+      submissionLimits: MAIL_SUBMISSION_LIMITS,
       tool: snapshot.tools.mail ?? null,
       suggestions: suggestMailDefaults(snapshot.projects),
       vaultReady: Boolean(vault),
@@ -971,6 +987,9 @@ export async function createApplication(options = {}) {
     await store.update((state) => {
       state.mail.domains = state.mail.domains.filter((item) => item.domain !== domainName);
       state.mail.mailboxes = (state.mail.mailboxes ?? []).filter((item) => item.domain !== domainName);
+      // The helper already dropped this domain's project SMTP logins with the domain.
+      for (const credential of (state.mail.submissionCredentials ?? []).filter((item) => item.domain === domainName)) removeSmtpEnvironment(state, credential);
+      state.mail.submissionCredentials = (state.mail.submissionCredentials ?? []).filter((item) => item.domain !== domainName);
       appendAudit(state, { action: 'mail.domain_remove', outcome: 'success', actor: 'owner', target: domainName, detail: force && attached.length ? `Removed with ${attached.length} mailbox(es)` : 'Removed mail domain' });
     });
     return sendJson(response, 200, mailSettingsView());
@@ -1060,6 +1079,13 @@ export async function createApplication(options = {}) {
         status: 'configured',
         simulated: mode === 'demo',
         at: new Date().toISOString(),
+        configVersion: mode === 'demo' ? MAIL_CONFIG_VERSION : (Number.isInteger(hostConfiguration?.configVersion) ? hostConfiguration.configVersion : 1),
+        // Which public listeners the host really opened (a failed certificate keeps them on loopback).
+        inbound: mode === 'demo' ? null : {
+          smtp: hostConfiguration?.inbound?.smtp === true,
+          submission: hostConfiguration?.inbound?.submission === true,
+          imaps: hostConfiguration?.inbound?.imaps === true
+        },
         detail: mode === 'demo'
           ? 'Simulated: Postfix/Dovecot/OpenDKIM configuration was not applied to this machine.'
           : (hostConfiguration?.notice || 'Host mail services configured only for the ports permitted by the latest readiness check.')
@@ -1108,6 +1134,223 @@ export async function createApplication(options = {}) {
       appendAudit(state, { action: 'mail.mailbox_delete', outcome: 'success', actor: 'owner', target: `${mailbox.localPart}@${mailbox.domain}`, detail: 'Mailbox removed' });
     });
     return sendJson(response, 200, { ok: true });
+  }
+
+  // Only the listed fields may be sent; anything else is a mistake or a probe.
+  function onlyFields(body, allowed) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('Request body must be a JSON object.');
+    const extra = Object.keys(body).filter((key) => !allowed.includes(key));
+    if (extra.length) throw new InputError(`Unexpected field: ${extra[0].slice(0, 40)}.`);
+    return body;
+  }
+
+  async function handleMailboxPassword(request, response, id) {
+    if (!requireSession(request, response, true)) return;
+    const body = onlyFields(await readJson(request), ['password']);
+    const mailbox = mailboxById(id);
+    const mail = store.read((state) => ({ configured: state.mail?.configure?.status === 'configured' }));
+    if (!mail.configured) throw new InputError('Complete the mail installation step before changing a mailbox password.');
+    // The same policy as creating the mailbox.
+    const password = validateStrongPassword(body.password, 'Mailbox password');
+    const address = `${mailbox.localPart}@${mailbox.domain}`;
+    if (mode === 'host') {
+      const result = await callMailHelper({ operation: 'set-mailbox-password', domain: mailbox.domain, localPart: mailbox.localPart, password }, 'Host mailbox provisioning is not available. Re-run the Strckro installer.');
+      if (!result.ok) {
+        await store.update((state) => appendAudit(state, { action: 'mail.mailbox_password', outcome: 'failure', actor: 'owner', target: address, detail: 'The host refused the new password' }));
+        if (result.code === 'not_found') throw new NotFoundError(result.error || 'Mailbox was not found.');
+        throw new InputError(result.error || 'Host mailbox password change was rejected.');
+      }
+    }
+    const changedAt = new Date().toISOString();
+    await store.update((state) => {
+      const target = (state.mail?.mailboxes ?? []).find((item) => item.id === mailbox.id);
+      if (target) target.passwordChangedAt = changedAt;
+      appendAudit(state, { action: 'mail.mailbox_password', outcome: 'success', actor: 'owner', target: address, detail: `Mailbox password changed without storing it${mode === 'demo' ? ' (simulated)' : ''}` });
+    });
+    return sendJson(response, 200, { ok: true, passwordChangedAt: changedAt, simulated: mode === 'demo' });
+  }
+
+  function queryInteger(url, name, { min, max, fallback, label }) {
+    const raw = url.searchParams.get(name);
+    if (raw === null || raw === '') return fallback;
+    if (!/^\d{1,6}$/.test(raw) || Number(raw) < min || Number(raw) > max) throw new InputError(`${label} must be a whole number from ${min} to ${max}.`);
+    return Number(raw);
+  }
+
+  // Delivery state of recent mail sent from one mailbox. On a host the helper reads
+  // Postfix's log and returns parsed records for this mailbox only; the sandbox derives
+  // simulated records from the mailbox's Sent folder.
+  async function handleMailDelivery(request, response, id, url) {
+    if (!requireSession(request, response)) return;
+    const mailbox = mailboxById(id);
+    const limit = queryInteger(url, 'limit', { min: 1, max: DELIVERY_LIMIT_MAX, fallback: DELIVERY_LIMIT_DEFAULT, label: 'Limit' });
+    const hours = queryInteger(url, 'hours', { min: 1, max: DELIVERY_HOURS_MAX, fallback: DELIVERY_HOURS_DEFAULT, label: 'Hours' });
+    const address = `${mailbox.localPart}@${mailbox.domain}`;
+    const generatedAt = new Date().toISOString();
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    let report;
+    if (mode === 'host') {
+      if (!store.read((state) => state.mail?.configure?.status === 'configured')) throw new InputError('Complete the mail installation step first.');
+      const result = await callMailHelper({ operation: 'mail-delivery', domain: mailbox.domain, localPart: mailbox.localPart, limit, sinceHours: hours }, 'Host mail delivery status is not available. Re-run the Strckro installer.');
+      if (!result.ok) {
+        if (result.code === 'not_found') throw new NotFoundError(result.error || 'Mailbox was not found.');
+        throw new InputError(result.error || 'The mail log could not be read.');
+      }
+      report = normalizeDeliveryReport(result, { limit });
+    } else {
+      report = { truncated: false, records: simulateDeliveryRecords({ sent: await sandboxSentMessages(mailbox, Date.parse(since)), localAddresses: sandboxAddresses(), limit }) };
+    }
+    return sendJson(response, 200, { mailbox: { id: mailbox.id, address }, since, generatedAt, simulated: mode !== 'host', truncated: report.truncated, records: report.records });
+  }
+
+  async function handleMailQueue(request, response) {
+    if (!requireSession(request, response)) return;
+    const generatedAt = new Date().toISOString();
+    if (mode === 'host') {
+      if (!store.read((state) => state.mail?.configure?.status === 'configured')) throw new InputError('Complete the mail installation step first.');
+      const result = await callMailHelper({ operation: 'mail-queue-summary' }, 'Host mail queue status is not available. Re-run the Strckro installer.');
+      if (!result.ok) throw new InputError(result.error || 'The mail queue could not be read.');
+      return sendJson(response, 200, { generatedAt, simulated: false, ...normalizeQueueSummary(result) });
+    }
+    const mailboxes = store.read((state) => (state.mail?.mailboxes ?? []).slice(0, 20).map((item) => ({ id: item.id, domain: item.domain, localPart: item.localPart })));
+    const since = Date.now() - DELIVERY_HOURS_MAX * 60 * 60 * 1000;
+    const records = [];
+    for (const mailbox of mailboxes) records.push(...simulateDeliveryRecords({ sent: await sandboxSentMessages(mailbox, since), localAddresses: sandboxAddresses(), limit: DELIVERY_LIMIT_MAX }));
+    return sendJson(response, 200, { generatedAt, simulated: true, ...normalizeQueueSummary(simulateQueueSummary(records)) });
+  }
+
+  function sandboxAddresses() {
+    return store.read((state) => (state.mail?.mailboxes ?? []).map((item) => `${item.localPart}@${item.domain}`));
+  }
+
+  async function sandboxSentMessages(mailbox, since) {
+    const page = await mailStore.list(mailbox, 'Sent', { offset: 0, limit: MAIL_LIST_MAX }).catch(() => ({ messages: [] }));
+    return (page.messages ?? []).flatMap((item) => {
+      const time = Number(item.time) || 0;
+      if (time < since) return [];
+      let summary;
+      try { summary = summarizeMessage(Buffer.from(String(item.headers ?? ''), 'base64'), Buffer.from(String(item.body ?? ''), 'base64')); } catch { return []; }
+      const recipients = [...new Set([...(summary.to ?? []), ...(summary.cc ?? [])].map((entry) => String(entry?.address ?? '').toLowerCase()).filter(Boolean))];
+      return recipients.length ? [{ messageId: summary.messageId || null, time, recipients }] : [];
+    });
+  }
+
+  // ── Project SMTP credentials ──────────────────────────────────────────────
+  // A SASL login that may submit mail only as one From address on a managed domain.
+  // It has no mailbox. Its settings go into the project's encrypted environment.
+  const SMTP_ENVIRONMENT_KEYS = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'];
+
+  function publicSmtpCredential(item) {
+    return { id: item.id, projectSlug: item.projectSlug, login: item.login, from: item.from, createdAt: item.createdAt, simulated: Boolean(item.simulated) };
+  }
+
+  function smtpCredentialBlocker(mail) {
+    if (mail?.configure?.status !== 'configured') return 'Complete the mail installation step first.';
+    if (mode !== 'host') return null;
+    if ((mail.configure.configVersion ?? 1) < MAIL_CONFIG_VERSION) return 'Apply the mail configuration again (Mail → Server) so the host enforces sender addresses and submission limits.';
+    if (mail.configure.inbound?.submission !== true) return 'Project SMTP needs the submission port 587 open on this host. Allow 587 in the firewall, check connectivity and apply the configuration again.';
+    return null;
+  }
+
+  function rewriteProjectEnvironment(project, change) {
+    const content = project.environment?.encryptedContent ? vault.decrypt(project.environment.encryptedContent) : '';
+    const variables = new Map(parseEnvironmentDocument(content).variables.map((item) => [item.key, item.value]));
+    if (!change(variables)) return false;
+    const environment = validateEnvironmentContent(updateEnvironmentDocument(content, [...variables].map(([key, value]) => ({ key, value }))));
+    project.environment = { keys: environment.keys, updatedAt: new Date().toISOString(), encryptedContent: vault.encrypt(environment.content) };
+    return true;
+  }
+
+  // Removes the SMTP_* keys only while they still belong to this credential, so
+  // values the owner changed by hand are left alone.
+  function removeSmtpEnvironment(state, credential) {
+    const project = state.projects.find((item) => item.slug === credential.projectSlug);
+    if (!project?.environment?.encryptedContent || !vault) return false;
+    return rewriteProjectEnvironment(project, (variables) => {
+      if (variables.get('SMTP_USER') !== credential.login) return false;
+      for (const key of SMTP_ENVIRONMENT_KEYS) variables.delete(key);
+      return true;
+    });
+  }
+
+  async function handleSmtpCredentialCreate(request, response) {
+    if (!requireSession(request, response, true)) return;
+    if (!vault) throw new InputError('Credential vault is not configured. Set HOSTMGR_SECRET_KEY before creating SMTP credentials.');
+    const body = onlyFields(await readJson(request), ['projectSlug', 'localPart', 'domain']);
+    const snapshot = store.snapshot();
+    const mail = snapshot.mail ?? initialMailState();
+    const blocked = smtpCredentialBlocker(mail);
+    if (blocked) throw new InputError(blocked);
+    const projectSlug = typeof body.projectSlug === 'string' ? body.projectSlug : '';
+    const project = snapshot.projects.find((item) => item.slug === projectSlug);
+    if (!project) throw new InputError('Choose a project.');
+    const domain = validateDomain({ hostname: body.domain });
+    if (!(mail.domains ?? []).some((item) => item.domain === domain)) throw new InputError('Selected mail domain is not configured.');
+    const localPart = validateLocalPart(body.localPart);
+    if ((mail.submissionCredentials ?? []).some((item) => item.projectSlug === projectSlug)) throw new InputError('This project already has an SMTP credential. Revoke it first to issue a new one.');
+    const credential = {
+      id: randomUUID(), projectSlug, localPart, domain, from: `${localPart}@${domain}`, login: submissionLogin(projectSlug),
+      createdAt: new Date().toISOString(), simulated: mode === 'demo'
+    };
+    const password = randomBytes(24).toString('base64url');
+    // The helper reads the project and From address from the stored state, so the
+    // credential is stored first and removed again if the host refuses it.
+    await store.update((state) => {
+      state.mail ??= initialMailState();
+      state.mail.submissionCredentials ??= [];
+      if (state.mail.submissionCredentials.some((item) => item.projectSlug === projectSlug)) throw new InputError('This project already has an SMTP credential. Revoke it first to issue a new one.');
+      state.mail.submissionCredentials.push(credential);
+    });
+    if (mode === 'host') {
+      let failure = null;
+      try {
+        const result = await callMailHelper({ operation: 'create-submission-credential', projectSlug, password }, 'Host mail configuration is not available. Re-run the Strckro installer.');
+        if (!result.ok) failure = new InputError(result.error || 'The host refused the SMTP credential.');
+      } catch (error) { failure = error instanceof InputError ? error : new InputError('The host could not create the SMTP credential. Nothing was changed.'); }
+      if (failure) {
+        await store.update((state) => {
+          state.mail.submissionCredentials = (state.mail.submissionCredentials ?? []).filter((item) => item.id !== credential.id);
+          appendAudit(state, { action: 'mail.smtp_credential_create', outcome: 'failure', actor: 'owner', target: projectSlug, detail: 'The host refused the credential; it was removed again' });
+        });
+        throw failure;
+      }
+    }
+    const settings = { SMTP_HOST: mail.hostname, SMTP_PORT: '587', SMTP_USER: credential.login, SMTP_PASS: password, SMTP_FROM: credential.from };
+    await store.update((state) => {
+      const target = state.projects.find((item) => item.slug === projectSlug);
+      if (target) rewriteProjectEnvironment(target, (variables) => { for (const [key, value] of Object.entries(settings)) variables.set(key, value); return true; });
+      appendAudit(state, { action: 'mail.smtp_credential_create', outcome: 'success', actor: 'owner', target: projectSlug, detail: `Login ${credential.login} may send as ${credential.from}; ${SMTP_ENVIRONMENT_KEYS.join(', ')} saved to the project environment${mode === 'demo' ? ' (simulated)' : ''}` });
+    });
+    response.setHeader('Cache-Control', 'no-store');
+    return sendJson(response, 201, {
+      ok: true,
+      credential: publicSmtpCredential(credential),
+      // Shown once. It is also in the project's environment, which applies on the next deploy.
+      password,
+      settings: { host: settings.SMTP_HOST, port: 587, security: 'starttls', user: settings.SMTP_USER, from: settings.SMTP_FROM },
+      environmentKeys: SMTP_ENVIRONMENT_KEYS
+    });
+  }
+
+  async function handleSmtpCredentialDelete(request, response, id) {
+    if (!requireSession(request, response, true)) return;
+    const snapshot = store.snapshot();
+    const credential = (snapshot.mail?.submissionCredentials ?? []).find((item) => item.id.toLowerCase() === id.toLowerCase());
+    if (!credential) throw new NotFoundError('SMTP credential was not found.');
+    await revokeSmtpCredentialOnHost(credential);
+    let environmentCleared = false;
+    await store.update((state) => {
+      state.mail.submissionCredentials = (state.mail.submissionCredentials ?? []).filter((item) => item.id !== credential.id);
+      environmentCleared = removeSmtpEnvironment(state, credential);
+      appendAudit(state, { action: 'mail.smtp_credential_revoke', outcome: 'success', actor: 'owner', target: credential.projectSlug, detail: `Login ${credential.login} revoked${environmentCleared ? '; SMTP_* removed from the project environment' : ''}` });
+    });
+    return sendJson(response, 200, { ok: true, environmentCleared });
+  }
+
+  async function revokeSmtpCredentialOnHost(credential) {
+    if (mode !== 'host' || credential.simulated) return;
+    const result = await callMailHelper({ operation: 'revoke-submission-credential', projectSlug: credential.projectSlug }, 'Host mail configuration is not available. Re-run the Strckro installer.');
+    if (!result.ok) throw new InputError(result.error || 'The host refused to revoke the SMTP credential.');
   }
 
   function mailboxById(id) {
@@ -1726,6 +1969,9 @@ export async function createApplication(options = {}) {
     if (domainMutations.has(slug)) throw new InputError('กรุณารอให้ Verify โดเมนเสร็จก่อนลบโปรเจค');
     const project = findProject(store.snapshot(), slug);
     if (store.snapshot().jobs.some((item) => item.projectSlug === slug && ['queued', 'running'].includes(item.status))) throw new InputError('Wait for the queued deployment to finish before deleting this project.');
+    // A deleted project keeps no way to send mail through this host.
+    const smtpCredential = (store.snapshot().mail?.submissionCredentials ?? []).find((item) => item.projectSlug === slug);
+    if (smtpCredential) await revokeSmtpCredentialOnHost(smtpCredential);
     if (mode === 'host') {
       const socketPath = process.env.HOSTMGR_DEPLOY_HELPER_SOCKET;
       if (!socketPath) throw new InputError('Host project cleanup is not configured. Re-run the Strckro installer.');
@@ -1736,6 +1982,7 @@ export async function createApplication(options = {}) {
     await store.update((state) => {
       findProject(state, slug);
       state.projects = state.projects.filter((item) => item.slug !== slug);
+      if (state.mail?.submissionCredentials) state.mail.submissionCredentials = state.mail.submissionCredentials.filter((item) => item.projectSlug !== slug);
       const removedNotificationHooks = (state.notificationHooks ?? []).filter((hook) => hook.projectSlug === slug).length;
       state.notificationHooks = (state.notificationHooks ?? []).filter((hook) => hook.projectSlug !== slug);
       appendAudit(state, { action: 'project.delete', outcome: 'success', actor: 'owner', target: slug, detail: `Removed project configuration, its managed workspace, and ${removedNotificationHooks} project webhook(s).` });

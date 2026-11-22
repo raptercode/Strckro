@@ -21,6 +21,7 @@ import {
   generatePassword,
 } from "./model.js";
 import { dnsRecords, portReadout, deliveryLabel } from "./parts.js";
+import { secretReveal } from "../../core/overlays.js";
 
 const DNS_RECHECK_MS = 90_000;
 
@@ -269,6 +270,49 @@ export function mailboxesView(ws) {
     ctx.toast(`ลบ ${address} แล้ว`);
   };
 
+  // Same policy and generator as creating a mailbox. The Portal keeps no password.
+  const changePassword = (mailbox) => {
+    const address = `${mailbox.localPart}@${mailbox.domain}`;
+    const d = ctx.dialog(`Change password · ${address}`);
+    const next = field("New password", "password", {
+      type: "password",
+      required: true,
+      minLength: 12,
+      autocomplete: "new-password",
+      hint: "อย่างน้อย 12 ตัวอักษร มีตัวพิมพ์ใหญ่ เล็ก ตัวเลข และสัญลักษณ์ โปรแกรมอีเมลที่ใช้รหัสเดิมต้องเข้าระบบใหม่",
+    });
+    d.body.append(
+      form(
+        async (values) => {
+          await ctx.api.post(`/api/mail/mailboxes/${mailbox.id}/password`, {
+            password: values.password,
+          });
+          next.control.value = "";
+          await d.close(true);
+          ctx.toast(`เปลี่ยนรหัสผ่านของ ${address} แล้ว`);
+        },
+        next,
+        h(
+          "div",
+          { class: "actions spread" },
+          button(
+            "Generate & copy",
+            async () => {
+              next.control.type = "text";
+              next.control.value = generatePassword();
+              await copy(next.control.value);
+            },
+            "small",
+          ),
+          submit("Change password"),
+        ),
+      ),
+    );
+    d.onClosed = () => {
+      next.control.value = "";
+    };
+  };
+
   rows.append(
     ...(mail.mailboxes.length
       ? mail.mailboxes.map((mailbox) => {
@@ -286,6 +330,7 @@ export function mailboxesView(ws) {
               "div",
               { class: "actions" },
               button("Open inbox", () => ws.show({ view: "inbox", box: mailbox.id, folder: "INBOX", offset: 0, message: "" }), "small"),
+              button("Change password", () => changePassword(mailbox), "small"),
               button(icon("copy"), () => copy(address), "icon", { "aria-label": `คัดลอก ${address}`, title: "คัดลอกที่อยู่" }),
               button(icon("trash"), () => remove(mailbox), "icon", { "aria-label": `ลบ ${address}`, title: "ลบ mailbox" }),
             ),
@@ -374,9 +419,186 @@ export function mailboxesView(ws) {
 
 const CHECK_TONE = { ok: "success", verified: "success", pending: "neutral" };
 
-export function serverView(ws) {
+const REASON_LABEL = {
+  delivered: "ส่งถึงแล้ว",
+  "recipient-unknown": "ไม่มีผู้รับนี้",
+  "mailbox-full": "กล่องผู้รับเต็ม",
+  policy: "ถูกปฏิเสธตาม policy",
+  spam: "ถูกมองว่าเป็นสแปม",
+  greylisted: "Greylisting (ปลายทางให้ลองใหม่)",
+  "rate-limited": "ปลายทางจำกัดอัตรา",
+  connection: "เชื่อมต่อปลายทางไม่ได้",
+  dns: "หา MX / DNS ปลายทางไม่เจอ",
+  tls: "ปัญหา TLS",
+  "message-too-large": "ข้อความใหญ่เกิน",
+  expired: "ค้างในคิวนานเกินไป",
+  other: "อื่น ๆ",
+};
+
+export const reasonLabel = (category) => REASON_LABEL[category] || category;
+
+export function queueAge(seconds) {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${seconds} วินาที`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} นาที`;
+  if (seconds < 172800) return `${Math.round(seconds / 3600)} ชั่วโมง`;
+  return `${Math.round(seconds / 86400)} วัน`;
+}
+
+/** Counts only: no address ever reaches this card. */
+function queueCard(ws, token) {
+  const { ctx } = ws;
+  const body = h("div", { class: "panel-body" }, h("p", { class: "muted" }, "กำลังอ่านคิว…"));
+  const load = async () => {
+    let queue;
+    try {
+      queue = await ctx.api.get("/api/mail/queue", { force: true });
+    } catch (error) {
+      if (ws.alive(token))
+        body.replaceChildren(h("p", { class: "muted" }, error.message || "อ่านคิวไม่สำเร็จ"));
+      return;
+    }
+    if (!ws.alive(token)) return;
+    body.replaceChildren(
+      h(
+        "dl",
+        { class: "key-values" },
+        h("dt", {}, "รออยู่ในคิว"),
+        h("dd", {}, String(queue.total), queue.simulated && h("small", {}, " · simulated")),
+        h("dt", {}, "Deferred"),
+        h("dd", {}, String(queue.byQueue?.deferred ?? 0)),
+        h("dt", {}, "รายการที่เก่าที่สุด"),
+        h("dd", {}, queueAge(queue.oldestAgeSeconds)),
+        h("dt", {}, "สาเหตุที่ค้าง"),
+        h(
+          "dd",
+          {},
+          queue.deferralReasons?.length
+            ? queue.deferralReasons.map((item) => badge(`${reasonLabel(item.category)} · ${item.count}`, "neutral"))
+            : "—",
+        ),
+      ),
+      queue.truncated && h("small", {}, "คิวใหญ่มาก ตัวเลขนับเพียงบางส่วน"),
+      h("div", { class: "actions" }, button("Refresh", load, "small")),
+    );
+  };
+  void load();
+  return panel("Mail queue", "ข้อความที่ Postfix ยังส่งไม่สำเร็จ แสดงเป็นจำนวนเท่านั้น", body);
+}
+
+/**
+ * Project SMTP: a login that may send only as one From address, written into the
+ * project's environment as SMTP_HOST/PORT/USER/PASS/FROM. The password is shown once.
+ */
+function smtpCredentialsPanel(ws) {
   const { ctx } = ws;
   const mail = ws.data.mail;
+  const credentials = mail.smtpCredentials || [];
+  const projects = ws.data.projects || [];
+  const projectName = (slug) => projects.find((item) => item.slug === slug)?.name || slug;
+  const revoke = async (credential) => {
+    if (
+      !(await ctx.confirm(
+        "ยกเลิก SMTP credential?",
+        `${projectName(credential.projectSlug)} จะส่งอีเมลในนาม ${credential.from} ไม่ได้อีก ค่า SMTP_* ใน environment ของโปรเจคจะถูกลบ (มีผลใน deploy ครั้งถัดไป)`,
+        "ยกเลิก credential",
+      ))
+    )
+      return;
+    await ctx.api.delete(`/api/mail/smtp-credentials/${credential.id}`);
+    await ws.refresh();
+    serverView(ws);
+    ctx.toast("ยกเลิก SMTP credential แล้ว");
+  };
+  const rows = credentials.length
+    ? credentials.map((credential) =>
+        h(
+          "div",
+          { class: "list-row" },
+          h(
+            "div",
+            {},
+            h("strong", {}, projectName(credential.projectSlug)),
+            h(
+              "small",
+              {},
+              "ส่งในนาม ",
+              h("code", {}, credential.from),
+              " · login ",
+              h("code", {}, credential.login),
+              " · สร้างเมื่อ ",
+              when(credential.createdAt),
+            ),
+          ),
+          h("div", { class: "actions" }, button("Revoke", () => revoke(credential), "danger small")),
+        ),
+      )
+    : [h("p", { class: "muted" }, "ยังไม่มีโปรเจคที่ส่งอีเมลผ่าน host นี้")];
+  const available = projects.filter((project) => !credentials.some((item) => item.projectSlug === project.slug));
+  let create;
+  if (mail.smtpBlocked) create = h("p", { class: "notice warning" }, mail.smtpBlocked);
+  else if (!available.length || !mail.domains.length)
+    create = h("p", { class: "muted" }, mail.domains.length ? "ทุกโปรเจคมี credential แล้ว" : "เพิ่มโดเมนก่อน");
+  else
+    create = form(
+      async (values) => {
+        const result = await ctx.api.post("/api/mail/smtp-credentials", {
+          projectSlug: values.projectSlug,
+          localPart: values.localPart.trim(),
+          domain: values.domain,
+        });
+        secretReveal(
+          `SMTP สำหรับ ${projectName(result.credential.projectSlug)} — คัดลอกตอนนี้`,
+          [
+            `SMTP_HOST=${result.settings.host}`,
+            `SMTP_PORT=${result.settings.port}`,
+            `SMTP_USER=${result.settings.user}`,
+            `SMTP_PASS=${result.password}`,
+            `SMTP_FROM=${result.settings.from}`,
+          ].join("\n"),
+        );
+        await ws.refresh();
+        serverView(ws);
+        ctx.toast("บันทึกค่า SMTP_* ใน environment ของโปรเจคแล้ว มีผลใน deploy ครั้งถัดไป");
+      },
+      field("Project", "projectSlug", {
+        choices: available.map((project) => [project.slug, project.name || project.slug]),
+        required: true,
+      }),
+      h(
+        "div",
+        { class: "address-field" },
+        field("From address", "localPart", {
+          required: true,
+          placeholder: "noreply",
+          autocomplete: "off",
+          spellcheck: false,
+        }),
+        h("span", { "aria-hidden": "true" }, "@"),
+        field("Domain", "domain", {
+          choices: mail.domains.map((entry) => entry.domain),
+          required: true,
+        }),
+      ),
+      h(
+        "small",
+        {},
+        "credential นี้ส่งได้เฉพาะในนามที่อยู่นี้ผ่านพอร์ต 587 ไม่มีกล่องรับอีเมล และอยู่ใต้ขีดจำกัดอัตราเดียวกับ mailbox",
+      ),
+      h("div", { class: "actions" }, submit("Create credential")),
+    );
+  return panel(
+    "Project SMTP",
+    "ให้โปรเจคส่งอีเมลผ่าน host นี้ ค่าเชื่อมต่อถูกเก็บแบบเข้ารหัสใน environment ของโปรเจค",
+    h("div", { class: "panel-body stack" }, h("div", { class: "mailbox-list" }, ...rows), create),
+  );
+}
+
+export function serverView(ws) {
+  const { ctx } = ws;
+  const token = ws.token;
+  const mail = ws.data.mail;
+  const limits = ws.data.submissionLimits;
   const allowed = (port) =>
     mail.readiness?.inbound?.ports?.some(
       (item) => Number(item.port) === port && item.status === "allowed",
@@ -435,6 +657,13 @@ export function serverView(ws) {
             mail.configure?.detail && h("small", {}, " · ", mail.configure.detail),
           ),
         ),
+        mail.configure &&
+          !mail.configCurrent &&
+          h(
+            "p",
+            { class: "panel-body notice warning" },
+            "configuration บน host มาจากเวอร์ชันก่อน กด Apply configuration again เพื่อเปิดใช้การจำกัดอัตราการส่ง การตรวจที่อยู่ผู้ส่ง และ Project SMTP",
+          ),
         h(
           "div",
           { class: "panel-body actions" },
@@ -453,6 +682,14 @@ export function serverView(ws) {
                 h("dt", {}, name),
                 h("dd", {}, h("code", {}, value)),
               ]),
+              allowed(587) && limits && h("dt", {}, "ขีดจำกัดการส่ง"),
+              allowed(587) &&
+                limits &&
+                h(
+                  "dd",
+                  {},
+                  `ต่อ IP ต่อนาที: ${limits.messageRate} ข้อความ, ${limits.recipientRate} ผู้รับ, ${limits.connectionRate} การเชื่อมต่อ · สูงสุด ${limits.recipientsPerMessage} ผู้รับต่อข้อความ`,
+                ),
             )
           : h(
               "p",
@@ -465,6 +702,8 @@ export function serverView(ws) {
         "ผลตรวจพอร์ตล่าสุดที่ใช้ตัดสินว่าจะเปิด service ใดบ้าง",
         h("div", { class: "panel-body stack" }, portReadout(mail.readiness), button("Check again", recheck)),
       ),
+      mail.configure && queueCard(ws, token),
+      mail.configure && smtpCredentialsPanel(ws),
     ),
   );
 }

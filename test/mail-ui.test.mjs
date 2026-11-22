@@ -162,3 +162,105 @@ test("plain text links, dates, initials and generated passwords", () => {
   assert.equal(passwords.size, 20);
   for (const password of passwords) assert.match(password, /^[A-Za-z0-9_-]{20}$/);
 });
+
+test("mail reader helpers: filters, neighbour after delete, shortcuts", async () => {
+  const { filterMessages, neighbourAfterRemoval, mailShortcut } = await import(
+    "../public/ui/screens/mail/model.js"
+  );
+  const list = [
+    { id: "a", seen: false, flagged: true, hasAttachments: false },
+    { id: "b", seen: true, flagged: false, hasAttachments: true },
+  ];
+  assert.deepEqual(filterMessages(list, "all").map((m) => m.id), ["a", "b"]);
+  assert.deepEqual(filterMessages(list, "unread").map((m) => m.id), ["a"]);
+  assert.deepEqual(filterMessages(list, "starred").map((m) => m.id), ["a"]);
+  assert.deepEqual(filterMessages(list, "attachment").map((m) => m.id), ["b"]);
+  assert.equal(neighbourAfterRemoval(["a", "b", "c"], "b"), "c");
+  assert.equal(neighbourAfterRemoval(["a", "b", "c"], "c"), "b");
+  assert.equal(neighbourAfterRemoval(["a"], "a"), "");
+  assert.equal(neighbourAfterRemoval(["a"], "zz"), "");
+  assert.equal(mailShortcut({ key: "j" }), "next");
+  assert.equal(mailShortcut({ key: "J", shiftKey: true }), "next");
+  assert.equal(mailShortcut({ key: "#", shiftKey: true }), "delete");
+  assert.equal(mailShortcut({ key: "Delete" }), "delete");
+  assert.equal(mailShortcut({ key: "Escape" }), "close");
+  assert.equal(mailShortcut({ key: "r", ctrlKey: true }), null);
+  assert.equal(mailShortcut({ key: "c", metaKey: true }), null);
+  assert.equal(mailShortcut({ key: "s", altKey: true }), null);
+  assert.equal(mailShortcut({ key: "x" }), null);
+  assert.equal(mailShortcut({ key: "toString" }), null);
+});
+
+test("setup checklist rows are blocked exactly when the old wizard step was, and name what blocks them", async () => {
+  const { setupChecklist, setupRowFromSearch, SETUP_ROWS } = await import(
+    "../public/ui/screens/mail/checklist.js"
+  );
+  const mail = {
+    hostname: null,
+    domains: [],
+    outboundMode: null,
+    configure: null,
+    mailboxes: [],
+    readiness: { checkedAt: null, outbound: null, inbound: null },
+  };
+  const state = (m, options) =>
+    Object.fromEntries(setupChecklist(m, options).rows.map((row) => [row.id, row.state]));
+  // Every row agrees with mailStepAvailable for its wizard step.
+  for (const snapshot of [mail, { ...mail, hostname: "mail.example.com", domains: [{ domain: "example.com" }] }]) {
+    for (const row of setupChecklist(snapshot).rows)
+      assert.equal(row.state === "blocked", !mailStepAvailable(row.step, snapshot), row.id);
+  }
+  assert.deepEqual(SETUP_ROWS.map((row) => row.id), ["ports", "identity", "delivery", "dns", "activate", "mailbox", "test"]);
+  let result = setupChecklist(mail);
+  assert.equal(result.firstAction, "ports");
+  assert.deepEqual(state(mail), {
+    ports: "action", identity: "action", delivery: "blocked", dns: "blocked",
+    activate: "blocked", mailbox: "blocked", test: "blocked",
+  });
+  assert.match(result.rows.find((row) => row.id === "delivery").blocker, /Blocked by Identity.*hostname/);
+  mail.hostname = "mail.example.com";
+  mail.domains.push({ domain: "example.com", dns: {} });
+  mail.readiness = { checkedAt: "2026-01-01", outbound: { ports: [{ port: 587, status: "open" }] }, inbound: { ports: [{ port: 25, status: "allowed" }] } };
+  assert.equal(state(mail).ports, "ready");
+  assert.equal(state(mail).identity, "ready");
+  assert.equal(state(mail).dns, "action");
+  assert.match(setupChecklist(mail).rows.find((row) => row.id === "activate").blocker, /Blocked by Delivery mode/);
+  mail.outboundMode = "relay-587";
+  mail.relay = { host: "smtp.example.com" };
+  assert.equal(state(mail).delivery, "ready");
+  assert.equal(state(mail).activate, "action");
+  assert.match(setupChecklist(mail).rows.find((row) => row.id === "mailbox").blocker, /Blocked by Activate on host/);
+  mail.configure = { status: "configured" };
+  assert.match(setupChecklist(mail).rows.find((row) => row.id === "test").blocker, /Blocked by First mailbox/);
+  mail.mailboxes.push({ id: "m", localPart: "hello", domain: "example.com" });
+  assert.equal(state(mail).test, "action");
+  assert.equal(state(mail, { arrived: true }).test, "ready");
+  mail.lastTest = { status: "failed", from: "a@b", to: "c@d" };
+  assert.equal(state(mail).test, "action");
+  mail.lastTest.status = "passed";
+  assert.equal(state(mail).test, "ready");
+  // Direct MX also needs a verified PTR before Identity counts as ready.
+  mail.outboundMode = "direct";
+  assert.equal(state(mail).identity, "action");
+  mail.ptr = { status: "verified" };
+  assert.equal(state(mail).identity, "ready");
+  const all = setupChecklist(mail);
+  assert.equal(all.total, 7);
+  // Old ?step= links and new ?row= links both open a row.
+  assert.equal(setupRowFromSearch(new URLSearchParams("step=3")), "dns");
+  assert.equal(setupRowFromSearch(new URLSearchParams("step=7")), "test");
+  assert.equal(setupRowFromSearch(new URLSearchParams("row=delivery")), "delivery");
+  assert.equal(setupRowFromSearch(new URLSearchParams("step=99")), null);
+  assert.equal(setupRowFromSearch(new URLSearchParams("row=nope")), null);
+});
+
+test("mail management labels every delivery reason category and formats queue ages", async () => {
+  const { reasonLabel, queueAge } = await import("../public/ui/screens/mail/manage.js");
+  const { REASON_CATEGORIES } = await import("../scripts/mail-delivery-log.mjs");
+  for (const category of REASON_CATEGORIES) assert.notEqual(reasonLabel(category), category, category);
+  assert.equal(queueAge(null), "—");
+  assert.equal(queueAge(45), "45 วินาที");
+  assert.equal(queueAge(600), "10 นาที");
+  assert.equal(queueAge(7200), "2 ชั่วโมง");
+  assert.equal(queueAge(3 * 86400), "3 วัน");
+});

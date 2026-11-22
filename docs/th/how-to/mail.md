@@ -3,7 +3,7 @@
 [English](../../en/how-to/mail.md)
 
 
-ใช้หลังจากตั้งค่า mail service ครั้งแรกที่ `/mail/setup` แล้ว ทุกอย่างในหน้านี้ต้องใช้บัญชี Master เหตุผลของการออกแบบอยู่ใน [ADR 0025](../knowledge/adr/0025-port-aware-mail-host-provisioning.md) และ [ADR 0033](../knowledge/adr/0033-mail-domains-apply-at-once-and-the-portal-reads-mailboxes.md)
+ใช้หลังจากตั้งค่า mail service ครั้งแรกที่ `/mail/setup` แล้ว ทุกอย่างในหน้านี้ต้องใช้บัญชี Master เหตุผลของการออกแบบอยู่ใน [ADR 0025](../knowledge/adr/0025-port-aware-mail-host-provisioning.md), [ADR 0033](../knowledge/adr/0033-mail-domains-apply-at-once-and-the-portal-reads-mailboxes.md) และ [ADR 0034](../knowledge/adr/0034-mail-submission-limits-project-smtp-and-delivery-status.md)
 
 ## อ่านและส่งอีเมล
 
@@ -48,9 +48,25 @@ Portal ตรวจ records ซ้ำให้เอง: ตอนเพิ่�
 
 **Open inbox** ไปที่ mailbox นั้นในกล่องอีเมล ถ้าต้องการใช้โปรแกรมอีเมลด้วย ดู **Mail → Server → Mail client settings** ซึ่งแสดงเฉพาะพอร์ตที่ firewall ของ host อนุญาต
 
+**Change password** ตั้งรหัสผ่านใหม่ตามกฎเดียวกับการสร้าง mailbox และมีปุ่ม **Generate & copy** เช่นกัน โปรแกรมอีเมลที่ใช้รหัสเดิมต้องเข้าระบบใหม่ Portal ไม่เก็บรหัสผ่าน
+
+โปรแกรมอีเมลส่งได้ทางพอร์ต 587 เท่านั้น ใช้ที่อยู่เต็มเป็น username และส่งได้เฉพาะในนามที่อยู่นั้น แต่ละที่อยู่ client เชื่อมต่อพร้อมกันได้ 10 และส่งได้ 60 ข้อความถึง 300 ผู้รับต่อนาที ไม่เกิน 100 ผู้รับต่อข้อความ เมื่อเกิน server จะบอกให้ลองใหม่ภายหลัง ไม่มีการล็อก
+
+## ให้โปรเจคส่งอีเมล
+
+**Mail → Server → Project SMTP** ให้ login แก่โปรเจคหนึ่ง ที่ส่งได้เฉพาะในนาม From address เดียวบนโดเมนของ host นี้ เลือกโปรเจค ที่อยู่ และโดเมน แล้วกด **Create credential** รหัสผ่านแสดงครั้งเดียว Portal เขียน `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` ลง environment ของโปรเจคด้วย deploy โปรเจคเพื่อใช้ค่าเหล่านี้ login นี้ไม่มีกล่องอีเมลและถูกจำกัดอัตราเหมือน client อื่น
+
+ต้องอนุญาตพอร์ต 587 ใน firewall และ apply configuration ด้วยเวอร์ชันนี้ก่อน **Revoke** ลบ login และค่า `SMTP_*` ยกเว้นเมื่อคุณแก้ `SMTP_USER` เอง การลบโดเมนหรือลบโปรเจคก็ revoke ด้วย
+
+## คิวอีเมล
+
+**Mail → Server → Mail queue** แสดงจำนวนข้อความที่รอ จำนวนที่ deferred อายุของรายการที่เก่าที่สุด และสาเหตุที่พบบ่อย โดยไม่แสดงที่อยู่อีเมล สถานะการส่งของอีเมลที่ mailbox ส่งอ่านจาก log ของ Postfix เฉพาะของ mailbox นั้น
+
 ## เมื่อไรต้องตั้งค่า service ใหม่
 
 เฉพาะเมื่อเปลี่ยน mail hostname วิธีส่ง หรือ policy ของพอร์ต 25, 587, 993: **Mail → Server → Apply configuration again** การเพิ่มหรือลบโดเมนและ mailbox ไม่ต้องทำขั้นนี้
+
+หนึ่งครั้งหลังอัปเดตมาเวอร์ชันที่มีการจำกัดอัตรา: **Mail → Server** จะแจ้งว่า configuration เป็นเวอร์ชันเก่าจนกว่าจะ apply อีกครั้ง ซึ่งจะเปิดการจำกัดอัตรา การตรวจผู้ส่ง และทำให้ใช้ Project SMTP ได้
 
 ถ้าเคยเพิ่มโดเมนไว้ก่อนเวอร์ชันนี้โดยยังไม่ได้ activate ซ้ำ การเพิ่มหรือลบโดเมนใดก็ได้ หรือกด **Apply configuration again** จะเขียนโดเมนนั้นลง host
 

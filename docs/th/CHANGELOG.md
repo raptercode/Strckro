@@ -2,6 +2,15 @@
 
 [English](../en/CHANGELOG.md)
 
+## Unreleased
+
+- จำกัดอัตราการส่งที่เข้าระบบแล้วบน submission (พอร์ต 587) ต่อที่อยู่ client: เชื่อมต่อพร้อมกัน 10, ต่อนาที 60 การเชื่อมต่อ 60 การเข้าระบบ 60 ข้อความ และ 300 ผู้รับ, 100 ผู้รับต่อข้อความ พอร์ต 25 ใช้ค่าเริ่มต้นของ Postfix และไม่เปิดให้เข้าระบบอีก client ที่เข้าระบบส่งได้เฉพาะที่อยู่ที่ login ของตัวเองเป็นเจ้าของ host เดิมได้ค่านี้เมื่อกด **Mail → Server → Apply configuration again** ([ADR 0034](knowledge/adr/0034-mail-submission-limits-project-smtp-and-delivery-status.md))
+- เปลี่ยนรหัสผ่าน mailbox ได้ที่ **Mail → Mailboxes → Change password** ใช้ policy และตัวสร้างรหัสผ่านเดียวกับการสร้าง mailbox (helper operation `set-mailbox-password`)
+- สถานะการส่งของอีเมลที่ mailbox ส่ง (`GET /api/mail/mailboxes/<id>/delivery`) อ่านจาก log ของ Postfix ใน journald และจำกัดเฉพาะข้อความของ mailbox นั้น และสรุปคิวแบบนับจำนวน (`GET /api/mail/queue`) แสดงที่ **Mail → Server** sandbox จำลองทั้งสองอย่างจากโฟลเดอร์ Sent
+- Project SMTP: **Mail → Server → Project SMTP** ออก login ให้โปรเจคหนึ่งที่ส่งได้เฉพาะในนาม From address เดียว แสดงรหัสผ่านครั้งเดียว และเขียน `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` ลง environment ที่เข้ารหัสของโปรเจคสำหรับ deploy ครั้งถัดไป การ revoke ลบโดเมน หรือลบโปรเจคจะลบ login นี้
+- installer ติดตั้ง helper module ใหม่ `scripts/mail-delivery-log.mjs`
+- ยังไม่ได้ตรวจบน host จริง: ทั้งหมดนี้ยังไม่ได้รันกับ Postfix, Dovecot หรือ journald สิ่งที่ต้องตรวจอยู่ใน ADR 0034
+
 ## 1.1.5 — 2026-11-11
 
 - บัญชี Master เปิด **Git credentials → Global (legacy)** เพื่อดู credential เดิมและเปลี่ยน token ได้ โดยแอปที่ผูกอยู่ยังใช้ credential เดิม

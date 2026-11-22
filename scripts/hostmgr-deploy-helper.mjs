@@ -18,7 +18,8 @@ import { prepareWorkerActivation } from './worker-activation.mjs';
 import { updateStoredPassword } from './password-config.mjs';
 import { buildEdgeEvaluation, probeLoopbackHttp, probeLoopbackTls, publicEdgeResult, renderUnmatchedNginx, preserveManagedTlsForChallenge } from './nginx-edge.mjs';
 import { resolvePublicDomainAddresses } from './domain-dns.mjs';
-import { buildMailPortPlan, renderDkimTables, renderDovecotConfiguration, renderMap, renderOpenDkimConfiguration, renderPostfixMain, renderPostfixMaster } from './mail-host-config.mjs';
+import { MAIL_CONFIG_MARKER, MAIL_CONFIG_VERSION, MAIL_SENDER_LOGINS_MAP, MAIL_SUBMISSION_USERS_FILE, MailRequestError, assertOnlyFields, boundedInteger, buildMailPortPlan, renderDkimTables, renderDovecotConfiguration, renderMap, renderOpenDkimConfiguration, renderPostfixMain, renderPostfixMaster, renderSenderLoginMap, replacePasswdHash, submissionLogin, validDovecotHash, validateMailProjectSlug, validateMailboxPassword } from './mail-host-config.mjs';
+import { DELIVERY_HOURS_DEFAULT, DELIVERY_HOURS_MAX, DELIVERY_LIMIT_DEFAULT, DELIVERY_LIMIT_MAX, DELIVERY_LOG_LINES_MAX, createDeliveryCollector, createQueueSummary } from './mail-delivery-log.mjs';
 import { MAIL_MESSAGE_MAX_BYTES, MaildirError, appendMailMessage, deleteMailMessage, flagMailMessage, listMailFolders, listMailMessages, moveMailMessage, readMailMessage } from './maildir-store.mjs';
 
 const MAX_REQUEST_BYTES = 16 * 1024;
@@ -41,6 +42,11 @@ const MAIL_DOMAINS = `${MAIL_POSTFIX_ROOT}/domains`;
 const MAIL_MAILBOXES = `${MAIL_POSTFIX_ROOT}/mailboxes`;
 const MAIL_USERS = `${MAIL_ROOT}/users`;
 const MAIL_SASL = `${MAIL_ROOT}/sasl_passwd`;
+const MAIL_SUBMISSION_USERS = MAIL_SUBMISSION_USERS_FILE;
+const MAIL_SENDER_LOGINS = MAIL_SENDER_LOGINS_MAP;
+// Delivery reports read Postfix's own log lines from journald, never a file the Portal names.
+const POSTFIX_LOG_IDENTIFIERS = ['postfix/cleanup', 'postfix/qmgr', 'postfix/smtp', 'postfix/relay', 'postfix/lmtp', 'postfix/local', 'postfix/virtual', 'postfix/error', 'postfix/retry', 'postfix/discard'];
+const MAIL_LOG_READ_TIMEOUT_MS = 20_000;
 const MAIL_VMAIL_ROOT = '/var/vmail';
 const MAIL_DKIM_ROOT = '/etc/opendkim/keys';
 const MAIL_CERTIFICATE = '/etc/letsencrypt/live/hostmgr-mail';
@@ -120,6 +126,11 @@ async function dispatch(request) {
   if (request.operation === 'mail-move') return mailboxOperation(request, async (root) => moveMailMessage(root, request.folder, request.id, request.target, { own: await vmailOwner() }));
   if (request.operation === 'mail-delete') return mailboxOperation(request, (root) => deleteMailMessage(root, request.folder, request.id));
   if (request.operation === 'mail-store') return mailboxOperation(request, (root) => storeSpooledMessage(root, request.folder, request.spool, request.flags));
+  if (request.operation === 'set-mailbox-password') return setMailboxPassword(request);
+  if (request.operation === 'mail-delivery') return mailDeliveryReport(request);
+  if (request.operation === 'mail-queue-summary') return mailQueueSummary(request);
+  if (request.operation === 'create-submission-credential') return createSubmissionCredential(request);
+  if (request.operation === 'revoke-submission-credential') return revokeSubmissionCredential(request);
   throw new HelperError('Unsupported helper operation.');
 }
 
@@ -176,7 +187,9 @@ async function projectStorageStatus(slug) {
 }
 
 // Runs a command and hands its output over one line at a time, so a very long listing is never held in memory.
-function streamLines(command, commandArguments, { failure = 'A required host operation failed.', ...spawnOptions }, onLine) {
+// `maxLineLength` stops a command whose output never ends a line; `okCodes` lists
+// the exit codes that still mean success (journalctl may exit 1 when nothing matched).
+function streamLines(command, commandArguments, { failure = 'A required host operation failed.', maxLineLength = Number.POSITIVE_INFINITY, okCodes = [0], ...spawnOptions }, onLine) {
   return new Promise((resolve, reject) => {
     let child;
     try { child = spawn(command, commandArguments, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], ...spawnOptions }); }
@@ -193,11 +206,12 @@ function streamLines(command, commandArguments, { failure = 'A required host ope
           pending = pending.slice(end + 1);
           onLine(line);
         }
+        if (pending.length > maxLineLength) throw new Error('line too long');
       } catch { broken = true; child.kill('SIGKILL'); }
     });
     child.stderr.resume();
     child.once('error', () => reject(new HelperError(failure)));
-    child.once('close', (code) => (code === 0 && !broken && pending === '' ? resolve() : reject(new HelperError(failure))));
+    child.once('close', (code) => (okCodes.includes(code) && !broken && pending === '' ? resolve() : reject(new HelperError(failure))));
   });
 }
 
@@ -312,7 +326,7 @@ async function configureMail() {
   await run('/usr/sbin/postfix', ['check'], { failure: 'Postfix configuration validation failed.' });
   await run('/usr/bin/systemctl', ['enable', 'opendkim', 'dovecot', 'postfix'], { failure: 'Mail services could not be enabled.' });
   await run('/usr/bin/systemctl', ['restart', 'opendkim', 'dovecot', 'postfix'], { failure: 'Mail services could not be restarted with the managed configuration.' });
-  return { inbound: plan.inbound, externalReachability: plan.externalReachability, notice: certificateNotice };
+  return { inbound: plan.inbound, externalReachability: plan.externalReachability, notice: certificateNotice, configVersion: MAIL_CONFIG_VERSION };
 }
 
 async function createMailbox(domain, localPart, password) {
@@ -321,17 +335,12 @@ async function createMailbox(domain, localPart, password) {
   const safeDomain = validateMailDomain(domain);
   const safeLocalPart = validateMailLocalPart(localPart);
   if (!mail.domains.some((item) => item.domain === safeDomain)) throw new HelperError('Mail domain is not configured.');
-  if (typeof password !== 'string' || password.length < 12 || password.length > 512 || /[\r\n\0]/.test(password)) throw new HelperError('Mailbox password is invalid.');
+  validateMailboxPassword(password);
   const address = `${safeLocalPart}@${safeDomain}`;
   const users = await readTextOrEmpty(MAIL_USERS);
   if (users.split('\n').some((line) => line.startsWith(`${address}:`))) throw new HelperError('Mailbox already exists.');
   const vmail = await ensureVmailAccount();
-  // doveadm reads the password and its confirmation from stdin.
-  const hash = await run('/usr/bin/doveadm', ['pw', '-s', 'SHA512-CRYPT'], {
-    input: `${password}\n${password}\n`,
-    failure: 'Mailbox password could not be secured.'
-  });
-  if (!/^\{SHA512-CRYPT\}/.test(hash)) throw new HelperError('Mailbox password could not be secured.');
+  const hash = await hashMailPassword(password);
   const domainRoot = join(MAIL_VMAIL_ROOT, safeDomain);
   await mkdir(domainRoot, { recursive: true, mode: 0o750 });
   const domainDirectory = await open(domainRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
@@ -345,6 +354,7 @@ async function createMailbox(domain, localPart, password) {
   await chown(MAIL_USERS, 0, await lookupGroupId('dovecot'));
   await chmod(MAIL_USERS, 0o640);
   await addMailboxMap(address);
+  await writeSenderLoginMap(mail);
   const home = join(domainRoot, safeLocalPart);
   await mkdir(join(home, 'Maildir'), { recursive: true, mode: 0o750 });
   await chown(home, vmail.uid, vmail.gid);
@@ -365,8 +375,135 @@ async function deleteMailbox(domain, localPart) {
   const maps = (await readTextOrEmpty(MAIL_MAILBOXES)).split('\n').filter((line) => line && !line.startsWith(`${address} `));
   await writeFile(MAIL_MAILBOXES, renderMap(maps), { mode: 0o644 });
   await rebuildPostfixMap(MAIL_MAILBOXES, 0o644);
+  await writeSenderLoginMap(await readManagedMailState().catch(() => null));
   await run('/usr/bin/systemctl', ['reload', 'dovecot', 'postfix'], { failure: 'Mailbox services could not be reloaded.' });
   return { address };
+}
+
+// doveadm reads the password and its confirmation from stdin, never from its arguments.
+async function hashMailPassword(password) {
+  const hash = await run('/usr/bin/doveadm', ['pw', '-s', 'SHA512-CRYPT'], {
+    input: `${password}\n${password}\n`,
+    failure: 'Mailbox password could not be secured.'
+  });
+  if (!validDovecotHash(hash)) throw new HelperError('Mailbox password could not be secured.');
+  return hash;
+}
+
+// A Dovecot password file is replaced in one rename, so Dovecot never reads half of it.
+async function writeDovecotFile(path, content) {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await writeFile(temporary, content, { mode: 0o640, flag: 'wx' });
+    await chown(temporary, 0, await lookupGroupId('dovecot'));
+    await chmod(temporary, 0o640);
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error instanceof HelperError ? error : new HelperError('Mail password file could not be written.');
+  }
+}
+
+// Same password policy and hashing as create-mailbox; only the hash of the one line changes.
+async function setMailboxPassword(request) {
+  assertOnlyFields(request, ['operation', 'domain', 'localPart', 'password']);
+  await assertMailInstallation();
+  const address = `${validateMailLocalPart(request.localPart)}@${validateMailDomain(request.domain)}`;
+  const password = validateMailboxPassword(request.password);
+  const users = await readTextOrEmpty(MAIL_USERS);
+  if (!users.split('\n').some((line) => line.startsWith(`${address}:`))) throw new HelperError('Mailbox was not found.', null, 'not_found');
+  const hash = await hashMailPassword(password);
+  // Read again: the file may have changed while doveadm ran.
+  const next = replacePasswdHash(await readTextOrEmpty(MAIL_USERS), address, hash);
+  if (!next) throw new HelperError('Mailbox was not found.', null, 'not_found');
+  await writeDovecotFile(MAIL_USERS, next);
+  await run('/usr/bin/systemctl', ['reload', 'dovecot'], { failure: 'Mailbox services could not be reloaded.' });
+  return { address };
+}
+
+// Delivery state of recent mail this one mailbox sent. Postfix log lines are read
+// from journald and parsed here; only records whose envelope sender is this
+// mailbox's address leave the helper, and only their parsed fields.
+async function mailDeliveryReport(request) {
+  assertOnlyFields(request, ['operation', 'domain', 'localPart', 'limit', 'sinceHours']);
+  const limit = boundedInteger(request.limit, { min: 1, max: DELIVERY_LIMIT_MAX, fallback: DELIVERY_LIMIT_DEFAULT, label: 'Limit' });
+  const hours = boundedInteger(request.sinceHours, { min: 1, max: DELIVERY_HOURS_MAX, fallback: DELIVERY_HOURS_DEFAULT, label: 'Time window' });
+  return mailboxOperation(request, async () => {
+    const sender = `${validateMailLocalPart(request.localPart)}@${validateMailDomain(request.domain)}`;
+    const now = Date.now();
+    const since = now - hours * 60 * 60 * 1000;
+    const collector = createDeliveryCollector({ sender, since, limit, now });
+    const args = ['--no-pager', '--quiet', '--output=short-unix', `--since=@${Math.floor(since / 1000)}`, `--lines=${DELIVERY_LOG_LINES_MAX}`, ...POSTFIX_LOG_IDENTIFIERS.flatMap((name) => ['-t', name])];
+    await streamLines('/usr/bin/journalctl', args, { timeout: MAIL_LOG_READ_TIMEOUT_MS, maxLineLength: 64 * 1024, okCodes: [0, 1], failure: 'The mail log could not be read.' }, (line) => collector.push(line));
+    const report = collector.result();
+    return { address: sender, since: new Date(since).toISOString(), records: report.records, truncated: report.truncated };
+  });
+}
+
+// Counts only. postqueue -j lists every message with its addresses; none of them is returned.
+async function mailQueueSummary(request) {
+  assertOnlyFields(request, ['operation']);
+  await assertMailInstallation();
+  const summary = createQueueSummary({ now: Date.now() });
+  await streamLines('/usr/sbin/postqueue', ['-j'], { timeout: MAIL_LOG_READ_TIMEOUT_MS, maxLineLength: 1024 * 1024, failure: 'The mail queue could not be read.' }, (line) => summary.push(line));
+  return summary.result();
+}
+
+// A project credential may only be provisioned on a host whose generated
+// configuration enforces sender addresses and has the submission passdb; otherwise
+// the login could send as anyone.
+async function assertSubmissionConfigurationActive() {
+  const main = await readTextOrEmpty('/etc/postfix/main.cf');
+  const master = await readTextOrEmpty('/etc/postfix/master.cf');
+  const dovecot = await readTextOrEmpty('/etc/dovecot/conf.d/99-hostmgr-mail.conf');
+  const current = [main, master, dovecot].every((text) => text.split('\n').includes(MAIL_CONFIG_MARKER));
+  if (!current || !master.includes('smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch') || !main.includes(`smtpd_sender_login_maps = hash:${MAIL_SENDER_LOGINS}`) || !dovecot.includes(MAIL_SUBMISSION_USERS)) {
+    throw new HelperError('Apply the mail configuration again before creating project SMTP credentials.');
+  }
+  if (!/^submission inet /m.test(master)) throw new HelperError('Project SMTP needs the submission port (587) enabled on this host.');
+}
+
+// The Portal stores the credential (project, From address) first; the helper takes
+// those from the stored state, never from the request, and receives only the password.
+async function createSubmissionCredential(request) {
+  assertOnlyFields(request, ['operation', 'projectSlug', 'password']);
+  await assertMailInstallation();
+  const projectSlug = validateMailProjectSlug(request.projectSlug);
+  const password = validateMailboxPassword(request.password);
+  const mail = await readManagedMailState();
+  const credential = mail.submissionCredentials.find((item) => item.projectSlug === projectSlug);
+  if (!credential) throw new HelperError('Project SMTP credential was not found.', null, 'not_found');
+  await assertSubmissionConfigurationActive();
+  const hash = await hashMailPassword(password);
+  const lines = (await readTextOrEmpty(MAIL_SUBMISSION_USERS)).split('\n').filter((line) => line && line.split(':', 1)[0] !== credential.login);
+  lines.push(`${credential.login}:${hash}`);
+  await writeDovecotFile(MAIL_SUBMISSION_USERS, renderMap(lines));
+  await writeSenderLoginMap(mail);
+  await run('/usr/bin/systemctl', ['reload', 'dovecot', 'postfix'], { failure: 'Mail services could not be reloaded.' });
+  return { login: credential.login, from: credential.from };
+}
+
+async function revokeSubmissionCredential(request) {
+  assertOnlyFields(request, ['operation', 'projectSlug']);
+  await assertMailInstallation();
+  const login = submissionLogin(request.projectSlug);
+  const mail = await readManagedMailState();
+  const lines = (await readTextOrEmpty(MAIL_SUBMISSION_USERS)).split('\n').filter((line) => line && line.split(':', 1)[0] !== login);
+  await writeDovecotFile(MAIL_SUBMISSION_USERS, renderMap(lines));
+  await writeSenderLoginMap(mail, { exclude: login });
+  await run('/usr/bin/systemctl', ['reload', 'dovecot', 'postfix'], { failure: 'Mail services could not be reloaded.' });
+  return { login };
+}
+
+// Rebuilt from what exists on the host: mailbox addresses from the Dovecot user file,
+// project logins from the submission file, each project's From address from the state.
+async function writeSenderLoginMap(mail, { exclude = null } = {}) {
+  await mkdir(MAIL_POSTFIX_ROOT, { recursive: true, mode: 0o755 });
+  const mailboxes = (await readTextOrEmpty(MAIL_USERS)).split('\n').map((line) => line.split(':', 1)[0]).filter((address) => /^[^\s@,]+@[^\s@,]+$/.test(address));
+  const provisioned = new Set((await readTextOrEmpty(MAIL_SUBMISSION_USERS)).split('\n').map((line) => line.split(':', 1)[0]).filter(Boolean));
+  const credentials = (mail?.submissionCredentials ?? []).filter((item) => item.login !== exclude && provisioned.has(item.login));
+  await writeFile(MAIL_SENDER_LOGINS, renderSenderLoginMap({ mailboxes, credentials }), { mode: 0o644 });
+  await rebuildPostfixMap(MAIL_SENDER_LOGINS, 0o644);
 }
 
 async function removeMailDomain(domain, force) {
@@ -377,7 +514,7 @@ async function removeMailDomain(domain, force) {
   if (attached.length && !force) throw new HelperError('Delete mailboxes before removing this domain.');
   const remaining = mail.domains.filter((item) => item.domain !== safeDomain);
   if (remaining.length === mail.domains.length) throw new HelperError('Mail domain was not found.');
-  const nextMail = { ...mail, domains: remaining, mailboxes: mail.mailboxes.filter((item) => item.domain !== safeDomain) };
+  const nextMail = { ...mail, domains: remaining, mailboxes: mail.mailboxes.filter((item) => item.domain !== safeDomain), submissionCredentials: mail.submissionCredentials.filter((item) => item.domain !== safeDomain) };
   await writeMailMaps(nextMail);
   const tables = renderDkimTables(remaining);
   await writeFile('/etc/opendkim/KeyTable', tables.keyTable, { mode: 0o644 });
@@ -506,6 +643,19 @@ function validateMailState(mail) {
     if (!mail.relay || typeof mail.relay.host !== 'string' || !/^[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]$/i.test(mail.relay.host) || !Number.isInteger(mail.relay.port) || !validEncryptedSecret(mail.relay.encryptedSecret)) throw new HelperError('Mail relay configuration is invalid.');
   }
   mail.mailboxes = Array.isArray(mail.mailboxes) ? mail.mailboxes.map((item) => ({ ...item, domain: validateMailDomain(item?.domain), localPart: validateMailLocalPart(item?.localPart) })) : [];
+  // Project SMTP credentials: the login is derived from the project, never stored
+  // free-form, and a credential on a domain no longer managed here is dropped.
+  const managed = new Set(mail.domains.map((item) => item.domain));
+  const credentials = Array.isArray(mail.submissionCredentials) ? mail.submissionCredentials : [];
+  if (credentials.length > 200) throw new HelperError('Project SMTP credentials are invalid.');
+  mail.submissionCredentials = credentials.flatMap((item) => {
+    let projectSlug;
+    try { projectSlug = validateMailProjectSlug(item?.projectSlug); } catch { throw new HelperError('Project SMTP credentials are invalid.'); }
+    const domain = validateMailDomain(item?.domain);
+    const from = `${validateMailLocalPart(item?.localPart)}@${domain}`;
+    if (item?.login !== submissionLogin(projectSlug) || item?.from !== from) throw new HelperError('Project SMTP credentials are invalid.');
+    return managed.has(domain) ? [{ projectSlug, login: item.login, from, domain }] : [];
+  });
 }
 
 // Checked once, when the mail service is configured: the certificate request
@@ -554,6 +704,11 @@ async function writeMailMaps(mail) {
   await chmod(MAIL_USERS, 0o640);
   await rebuildPostfixMap(MAIL_DOMAINS, 0o644);
   await rebuildPostfixMap(MAIL_MAILBOXES, 0o644);
+  // Dovecot's second passdb names this file, so it always exists, even empty. Only
+  // project logins the Portal still lists, on a domain it still manages, are kept.
+  const logins = new Set((mail.submissionCredentials ?? []).map((item) => item.login));
+  await writeDovecotFile(MAIL_SUBMISSION_USERS, renderMap((await readTextOrEmpty(MAIL_SUBMISSION_USERS)).split('\n').filter((line) => line && logins.has(line.split(':', 1)[0]))));
+  await writeSenderLoginMap(mail);
 }
 
 async function preserveUsersFor(mailboxes) {
@@ -1487,7 +1642,8 @@ function redactBuildOutput(output, environment) {
   return safe;
 }
 
-function safeError(error) { return error instanceof HelperError ? error.message : 'Host helper operation failed.'; }
+// MailRequestError carries only the static messages of mail-host-config.mjs.
+function safeError(error) { return error instanceof HelperError || error instanceof MailRequestError ? error.message : 'Host helper operation failed.'; }
 class HelperError extends Error {
   constructor(message, buildOutput = null, code = null) {
     super(message);

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Limit authenticated submission (port 587) per client address: 10 connections at once, 60 connections, sign-ins and messages and 300 recipients a minute, 100 recipients per message. Port 25 keeps Postfix defaults and no longer offers sign-in. A signed-in client may send only as an address its login owns. Existing hosts get this with **Mail → Server → Apply configuration again** ([ADR 0034](knowledge/adr/0034-mail-submission-limits-project-smtp-and-delivery-status.md)).
+- Change a mailbox password from **Mail → Mailboxes → Change password**, with the same policy and generator as a new mailbox (helper operation `set-mailbox-password`).
+- Delivery status of mail a mailbox sent (`GET /api/mail/mailboxes/<id>/delivery`), read from the Postfix log in journald and limited to that mailbox's own messages, and a counts-only queue summary (`GET /api/mail/queue`) shown on **Mail → Server**. The sandbox simulates both from the Sent folder.
+- Project SMTP: **Mail → Server → Project SMTP** issues a login for one project that may send only as one From address, shows its password once and writes `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` into the project's encrypted environment for the next deploy. Revoking it, removing its domain or deleting the project removes it.
+- The installer ships a new helper module, `scripts/mail-delivery-log.mjs`.
+- Not verified on a real host: nothing here has run against Postfix, Dovecot or journald. The assumptions to check are listed in ADR 0034.
+
 ## 1.1.5 — 2026-11-11
 
 - Master accounts can find existing global Git credentials under **Git credentials → Global (legacy)** and replace a token while keeping all project bindings.

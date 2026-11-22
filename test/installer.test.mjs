@@ -250,7 +250,15 @@ test('installer restarts active services so an update cannot retain old Node mod
 test('mailbox creation supplies the Dovecot password and its confirmation on stdin', async () => {
   const helper = await readFile(new URL('../scripts/hostmgr-deploy-helper.mjs', import.meta.url), 'utf8');
   const createMailbox = helper.match(/async function createMailbox\(domain, localPart, password\) \{[\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(createMailbox, /run\('\/usr\/bin\/doveadm', \['pw', '-s', 'SHA512-CRYPT'\], \{\s*input: `\$\{password\}\\n\$\{password\}\\n`/);
+  const hashMailPassword = helper.match(/async function hashMailPassword\(password\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(hashMailPassword, /run\('\/usr\/bin\/doveadm', \['pw', '-s', 'SHA512-CRYPT'\], \{\s*input: `\$\{password\}\\n\$\{password\}\\n`/);
+  // Creating a mailbox, changing its password and issuing a project login share that one path.
+  assert.match(createMailbox, /await hashMailPassword\(password\)/);
+  for (const name of ['setMailboxPassword', 'createSubmissionCredential']) {
+    const body = helper.match(new RegExp(`async function ${name}\\(request\\) \\{[\\s\\S]*?\\n\\}`))?.[0] ?? '';
+    assert.match(body, /await hashMailPassword\(password\)/, name);
+    assert.match(body, /validateMailboxPassword\(request\.password\)/, name);
+  }
 });
 
 test('mailbox creation makes the domain directory traversable by vmail', async () => {
@@ -340,4 +348,20 @@ test('installer enrolls new hosts in the signed stable update channel without a 
   assert.match(script, /install -m 0644 -o root -g root "\$APP_ROOT\/\$UPDATE_PUBLIC_KEY_SOURCE" "\$UPDATE_PUBLIC_KEY_FILE"/);
   assert.match(script, /set_config_value HOSTMGR_UPDATE_CHANNEL "\$DEFAULT_UPDATE_CHANNEL"/);
   assert.match(script, /Preserve an existing custom feed/);
+});
+
+test('installer ships every module the root helper imports, including the mail delivery parser', async () => {
+  const script = await readFile(new URL('../strckro.sh', import.meta.url), 'utf8');
+  const helper = await readFile(new URL('../scripts/hostmgr-deploy-helper.mjs', import.meta.url), 'utf8');
+  const modules = [...helper.matchAll(/from '\.\/([a-z0-9-]+\.mjs)'/g)].map((match) => match[1]);
+  assert.ok(modules.includes('mail-delivery-log.mjs'));
+  for (const name of modules) {
+    const file = name.replace('.', '\\.');
+    // Either "$HELPER_ROOT/<name>" or a variable that names the same path (PASSWORD_SCRIPT).
+    const variable = script.match(new RegExp(`^([A-Z_]+)='/usr/local/lib/dashboard-portal/${file}'$`, 'm'))?.[1];
+    const target = variable ? `(?:\\$HELPER_ROOT/${file}|\\$${variable})` : `\\$HELPER_ROOT/${file}`;
+    assert.match(script, new RegExp(`install -m 0[67][0-9]{2} -o root -g root "\\$APP_ROOT/scripts/${file}" "${target}"`), `${name} is installed next to the helper`);
+  }
+  assert.match(script, /--check "\$STAGING_ROOT\/scripts\/mail-delivery-log\.mjs"/);
+  assert.match(script, /-f scripts\/mail-delivery-log\.mjs &&/);
 });
