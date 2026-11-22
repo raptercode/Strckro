@@ -105,7 +105,13 @@ test('a hung destination is cut off at the deadline', async () => {
     outgoing.end = () => {};
     return outgoing;
   };
-  await assert.rejects(postWebhook('https://discord.com/hook', {}, { request: hung, timeoutMs: 50 }), /timed out/);
+  // A real socket keeps the event loop alive; this EventEmitter fixture does not.
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    await assert.rejects(postWebhook('https://discord.com/hook', {}, { request: hung, timeoutMs: 50 }), /timed out/);
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test('the server refuses to save a private webhook and accepts a public one', async (t) => {

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shlex
 import signal
@@ -22,6 +23,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BootstrapChecks(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Exercise the real verifier with a disposable key, never the release key.
+        cls.keys = tempfile.TemporaryDirectory(prefix='portal-bootstrap-keys-')
+        cls.addClassCleanup(cls.keys.cleanup)
+        cls.private_key = Path(cls.keys.name) / 'private.pem'
+        subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(cls.private_key)],
+                       check=True, capture_output=True, timeout=10)
+        public_key = subprocess.check_output(['openssl', 'pkey', '-in', str(cls.private_key), '-pubout'], timeout=10).decode()
+        cls.bootstrap = re.sub(r'-----BEGIN PUBLIC KEY-----.*?-----END PUBLIC KEY-----',
+                               public_key.strip(), (ROOT / 'install.sh').read_text(), flags=re.S)
+
     def run_bootstrap(self, *, version=True, mode='ok', answers=None, tty=True, unprivileged=False, node_major=None):
         with tempfile.TemporaryDirectory(prefix='portal-bootstrap-test-') as fixture:
             base = Path(fixture)
@@ -43,16 +56,34 @@ printf 'Fixture installer completed\\n'
                     tar.addfile(info, io.BytesIO(content))
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             if mode == 'bad-hash': digest = '0' * 64
-            checksum_name = 'other.tar.gz' if mode == 'wrong-name' else archive.name
-            checksum = f'{digest}  {checksum_name}\n'
-            if mode == 'extra-checksum': checksum += f'{digest}  extra.tar.gz\n'
-            (base / (archive.name + '.sha256')).write_text(checksum)
+            payload = {
+                'channel': 'stable', 'version': '0.8.3', 'publishedAt': '2026-11-23T00:00:00Z',
+                'archiveUrl': f'https://github.com/raptercode/Strckro/releases/download/v0.8.3/{archive.name}',
+                'archiveSha256': digest, 'notes': 'Bootstrap test fixture',
+            }
+            if mode == 'wrong-version': payload['version'] = '0.8.4'
+            if mode == 'wrong-url': payload['archiveUrl'] = 'https://example.invalid/archive.tar.gz'
+            canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+            (base / 'payload').write_bytes(canonical)
+            signature = subprocess.check_output([
+                'openssl', 'pkeyutl', '-sign', '-inkey', str(self.private_key), '-rawin', '-in', str(base / 'payload')
+            ], timeout=10)
+            if mode == 'bad-signature': signature = bytes(64)
+            import base64
+            manifest = {'payload': payload, 'signature': base64.b64encode(signature).decode()}
+            if mode == 'unsigned': manifest.pop('signature')
+            (base / 'stable.json').write_text(json.dumps(manifest))
+            (base / 'install.sh').write_text(self.bootstrap)
             (base / 'mock-env').write_text(r'''
 source() {
   if [[ "$1" == /etc/os-release ]]; then
     ID=ubuntu; VERSION_ID=24.04
     [[ "$FIXTURE_MODE" != unsupported-os ]] || VERSION_ID=26.04
   else builtin source "$@"; fi
+}
+.() { source "$@"; }
+dpkg() {
+  if [[ "$FIXTURE_MODE" == wrong-arch ]]; then printf 's390x\n'; else printf 'amd64\n'; fi
 }
 uname() {
   case "$1" in
@@ -66,8 +97,8 @@ curl() {
   local output='' url='' latest=false
   while (( $# )); do
     case "$1" in
-      -o) output="$2"; shift 2 ;;
-      -w) latest=true; shift 2 ;;
+      -o|--output) output="$2"; shift 2 ;;
+      -w|--write-out) latest=true; shift 2 ;;
       --proto|--proto-redir) shift 2 ;;
       https://*) url="$1"; shift ;;
       *) shift ;;
@@ -82,6 +113,7 @@ curl() {
 }
 sudo() {
   printf 'sudo\n' > "$FIXTURE_ROOT/privilege"
+  [[ "${1:-}" == -v ]] && return 0
   [[ "$1" == -- ]] && shift
   "$@"
 }
@@ -93,7 +125,7 @@ sudo() {
             env = dict(os.environ, BASH_ENV=str(base/'mock-env'), FIXTURE_ROOT=str(base), FIXTURE_MODE=mode)
             args = '--version v0.8.3' if version else ''
             if node_major: args += f' --node-major={shlex.quote(node_major)}'
-            command = f'cat {shlex.quote(str(ROOT / "install.sh"))} | bash -s -- {args}'
+            command = f'cat {shlex.quote(str(base / "install.sh"))} | bash -s -- {args}'
             if not tty:
                 result = subprocess.run(['bash', '-c', command], env=env, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, timeout=15, start_new_session=True)
@@ -139,7 +171,7 @@ sudo() {
     def test_pinned_pipe_and_password_terminal(self):
         code, output, args, urls = self.run_bootstrap()
         self.assertEqual(code, 0, output)
-        self.assertEqual(args, ['--domain=portal.example.com', '--email=admin@example.com', '--node-major=24'])
+        self.assertEqual(args, ['--node-major=24', '--domain=portal.example.com', '--email=admin@example.com'])
         self.assertEqual(len(urls), 2)
         self.assertTrue(all('/download/v0.8.3/' in url for url in urls))
         self.assertIn('Fixture installer completed', output)
@@ -147,17 +179,17 @@ sudo() {
     def test_latest_and_selected_node(self):
         code, output, args, urls = self.run_bootstrap(version=False, node_major='20')
         self.assertEqual(code, 0, output)
-        self.assertEqual(args[-1], '--node-major=20')
+        self.assertIn('--node-major=20', args)
         self.assertTrue(urls[0].endswith('/releases/latest'))
 
     def test_sudo_handoff_with_terminal_stdin(self):
         code, output, args, _ = self.run_bootstrap(unprivileged=True)
         self.assertEqual(code, 0, output)
-        self.assertEqual(args[-1], '--node-major=24')
+        self.assertIn('--node-major=24', args)
         self.assertIn('Fixture installer completed', output)
 
     def test_fail_closed_before_installer(self):
-        for mode in ['bad-hash', 'wrong-name', 'extra-checksum', 'download-failure', 'bad-latest',
+        for mode in ['bad-hash', 'wrong-version', 'wrong-url', 'bad-signature', 'unsigned', 'download-failure', 'bad-latest',
                      'unsupported-os', 'wrong-arch', 'missing-installer']:
             with self.subTest(mode=mode):
                 code, output, args, _ = self.run_bootstrap(mode=mode, version=mode != 'bad-latest')
@@ -182,9 +214,9 @@ sudo() {
     def test_argument_validation_without_host_actions(self):
         for args in [['--version', '../bad'], ['--version'], ['--unknown'],
                      ['--node-major', '25'], ['--node-major'],
-                     ['--version', 'v0.8.3', '--version', 'v0.8.4']]:
+                     ['--ui-port', '0'], ['--ui-port', '65536']]:
             with self.subTest(args=args):
-                result = subprocess.run(['bash', str(ROOT/'install.sh'), *args], capture_output=True)
+                result = subprocess.run(['bash', str(ROOT/'install.sh'), *args], capture_output=True, timeout=5)
                 self.assertNotEqual(result.returncode, 0)
         result = subprocess.run(['bash', str(ROOT/'install.sh'), '--help'], capture_output=True)
         self.assertEqual(result.returncode, 0)
