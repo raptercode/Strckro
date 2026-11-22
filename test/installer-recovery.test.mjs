@@ -162,6 +162,70 @@ code=$?
   assert.match(result.stderr, /operations are active/);
 });
 
+test('installer retries Certbot only for lock contention and stops after a bounded wait', () => {
+  for (const [mode, status, attempts] of [['clears', 0, 2], ['challenge', 2, 1], ['busy', 1, 7]]) {
+    const result = spawnSync(bash, ['-s', '--', mode], { encoding: 'utf8', timeout: 8000, input: `
+root=$(mktemp -d)
+trap 'rm -f -- "$root/attempts" "$root/delays"; rmdir -- "$root"' EXIT
+mode=$1
+: > "$root/attempts"
+: > "$root/delays"
+certbot() {
+  [[ "$LC_ALL" == C && "$*" == --nginx ]] || return 90
+  printf x >> "$root/attempts"
+  if [[ "$mode" == challenge ]]; then
+    echo 'Domain validation failed.' >&2
+    return 2
+  fi
+  if [[ "$mode" == clears && "$(cat "$root/attempts")" == xx ]]; then
+    echo 'Certificate deployed.'
+    return 0
+  fi
+  echo 'Another instance of Certbot is already running.' >&2
+  return 1
+}
+sleep() {
+  [[ "$*" == 5 ]] || return 91
+  printf x >> "$root/delays"
+}
+${functions}
+(set -Eeuo pipefail; certbot_with_lock_retry --nginx)
+status=$?
+printf 'attempts=%s delays=%s\\n' "$(wc -c < "$root/attempts")" "$(wc -c < "$root/delays")"
+exit "$status"
+` });
+    assert.equal(result.status, status, result.stderr);
+    assert.match(result.stdout, new RegExp(`attempts=\\s*${attempts} delays=\\s*${attempts - 1}\\b`));
+    if (mode === 'clears') assert.match(result.stdout, /Certificate deployed/);
+    if (mode === 'challenge') assert.match(result.stderr, /Domain validation failed/);
+  }
+});
+
+test('installer preserves Dovecot traversal on hosts with managed mail', () => {
+  const directories = source.slice(source.indexOf('install -d -m 0700 -o "$APP_USER"'), source.indexOf('# Services need only traverse'));
+  const result = spawnSync(bash, ['-s'], { encoding: 'utf8', timeout: 8000, input: `
+set -e
+root=$(mktemp -d)
+PROJECT_CONFIG_DIR="$root/hostmgr"
+trap 'rm -f -- "$PROJECT_CONFIG_DIR/mail/.portal-installed"; rmdir -- "$PROJECT_CONFIG_DIR/mail" "$PROJECT_CONFIG_DIR" "$root"' EXIT
+CONFIG_ROOT="$root/config"
+DATA_ROOT="$root/data"
+APP_USER=dashboardportal
+install() {
+  case "\${!#}" in
+    "$PROJECT_CONFIG_DIR") printf 'parent=%s\\n' "$3" ;;
+    "$PROJECT_CONFIG_DIR/projects") printf 'projects=%s\\n' "$3" ;;
+  esac
+}
+${directories}
+mkdir -p "$PROJECT_CONFIG_DIR/mail"
+touch "$PROJECT_CONFIG_DIR/mail/.portal-installed"
+${directories}
+` });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'parent=0750\nprojects=0750\nparent=0711\nprojects=0750\n');
+});
+
 const tmpfilesPrerequisite = process.platform !== 'linux' ? 'Requires Linux systemd-tmpfiles and root ownership acceptance' : process.getuid() !== 0 ? 'Requires root to verify production tmpfiles ownership' : spawnSync('systemd-tmpfiles', ['--version']).status !== 0 ? 'Requires systemd-tmpfiles installed in the Linux acceptance fixture' : false;
 test('boot tmpfiles restores maintenance paths and preserves an existing live lock inode', { skip: tmpfilesPrerequisite }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'portal-tmpfiles-'));

@@ -8,7 +8,7 @@ import { mountProjectStorage, storageStatus, validateStoragePath } from './proje
 import { constants as fsConstants } from 'node:fs';
 import { access, chmod, chown, copyFile, cp, lchown, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv, X509Certificate } from 'node:crypto';
 import { DatabaseSync } from './sqlite.mjs';
 import { nodeBin, nodeMajorForProject, nodeRuntimeEnvironment } from './node-versions.mjs';
 import { readNodePackageManager, assertPnpmAvailable, pnpmServiceStart, PNPM_PATH, PNPM_VERSION } from './node-package-manager.mjs';
@@ -1069,12 +1069,15 @@ async function applyDomains(project) {
   const enabled = join(NGINX_ENABLED, `hostmgr-${project.slug}.conf`);
   await assertDomainsAreAvailable(project.domains.hosts, site, enabled);
   const snapshot = await snapshotNginx(site, enabled);
+  const certificate = certificateName(project.slug);
   try {
     await mkdir(ACME_ROOT, { recursive: true, mode: 0o755 });
-    await writeNginx(site, enabled, preserveManagedTlsForChallenge(renderHttpSite(project, ACME_ROOT), snapshot.site));
-    await testAndReloadNginx();
-    await issueCertificate(project);
-    await writeNginx(site, enabled, renderTlsSite(project, ACME_ROOT, certificateName(project.slug)));
+    if (!(await canReuseProjectCertificate(certificate, project.domains.hosts))) {
+      await writeNginx(site, enabled, preserveManagedTlsForChallenge(renderHttpSite(project, ACME_ROOT), snapshot.site));
+      await testAndReloadNginx();
+      await issueCertificate(project);
+    }
+    await writeNginx(site, enabled, renderTlsSite(project, ACME_ROOT, certificate));
     await testAndReloadNginx();
     await assertProjectEdge(project);
   } catch (error) {
@@ -1174,6 +1177,24 @@ async function assertDomainsAreAvailable(hosts, site, enabled) {
   }
 }
 
+async function canReuseProjectCertificate(name, hosts) {
+  const directory = `/etc/letsencrypt/live/${name}`;
+  try {
+    const [pem] = await Promise.all([readFile(`${directory}/fullchain.pem`), access(`${directory}/privkey.pem`)]);
+    const certificate = new X509Certificate(pem);
+    const now = Date.now();
+    const renewalWindow = 30 * 24 * 60 * 60 * 1000;
+    if (!(Date.parse(certificate.validFrom) <= now && Date.parse(certificate.validTo) > now + renewalWindow)) return false;
+    // Only split a SAN string composed entirely of unquoted DNS names.
+    const names = certificate.subjectAltName ?? '';
+    if (!/^DNS:[a-z0-9.-]+(?:, DNS:[a-z0-9.-]+)*$/i.test(names)) return false;
+    const certifiedHosts = names.toLowerCase().split(', ').map(entry => entry.slice(4));
+    return certifiedHosts.length === hosts.length && hosts.every(host => certifiedHosts.includes(host));
+  } catch {
+    return false;
+  }
+}
+
 async function issueCertificate(project) {
   const email = await acmeEmail();
   await Promise.all(project.domains.hosts.map(async host => {
@@ -1188,10 +1209,24 @@ async function issueCertificate(project) {
   // --expand only handles a strict superset of the previous certificate names.
   const args = ['certonly', '--webroot', '--webroot-path', ACME_ROOT, '--non-interactive', '--agree-tos', '--email', email, '--keep-until-expiring', '--renew-with-new-domains', '--cert-name', certificateName(project.slug)];
   for (const host of project.domains.hosts) args.push('-d', host);
-  await run('/usr/bin/certbot', args, {
-    timeout: 180_000,
-    failure: 'TLS certificate request failed. Confirm DNS reaches this host and port 80 serves /.well-known/acme-challenge/. If using a proxy, check its origin target, redirect, cache and firewall rules for this path; Proxy may remain enabled.'
-  });
+  const deadline = Date.now() + 180_000;
+  const retryDelayMs = 5_000;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await run('/usr/bin/certbot', args, {
+        timeout: Math.max(1, deadline - Date.now()),
+        env: { ...process.env, LC_ALL: 'C' },
+        failure: 'TLS certificate request failed. Confirm DNS reaches this host and port 80 serves /.well-known/acme-challenge/. If using a proxy, check its origin target, redirect, cache and firewall rules for this path; Proxy may remain enabled.'
+      });
+      return;
+    } catch (error) {
+      if (!error.commandOutput?.includes('Another instance of Certbot is already running.')) throw error;
+      if (attempt === 7 || Date.now() + retryDelayMs >= deadline) {
+        throw new HelperError('Certbot is busy with another certificate operation. Retry once it finishes.', error.commandOutput);
+      }
+      await delay(retryDelayMs);
+    }
+  }
 }
 
 async function acmeEmail() {
@@ -1259,15 +1294,26 @@ function projectIdentity(slug) {
 }
 
 async function ensureProjectUser(identity) {
-  const exists = await run('/usr/bin/id', ['-u', identity.user]).then(() => true).catch(() => false);
-  if (!exists) {
+  const accountExists = await run('/usr/bin/id', ['-u', identity.user]).then(() => true).catch(() => false);
+  if (!accountExists) {
     await run('/usr/sbin/useradd', ['--system', '--create-home', '--home-dir', identity.root, '--shell', '/usr/sbin/nologin', identity.user], { failure: 'The project service account could not be created.' });
     await clearPasswordLock();
   }
   identity.gid = await lookupUserGroupId(identity.user);
   identity.uid = Number(await run('/usr/bin/id', ['-u', identity.user]));
   await mkdir(identity.root, { recursive: true, mode: 0o750 });
-  await run('/usr/bin/chown', ['-R', '--no-dereference', `${identity.user}:${identity.user}`, identity.root]);
+  const owner = await lstat(identity.root);
+  // New releases get their own ownership before activation. Walk existing
+  // releases only when repairing a project root owned by another account.
+  if (owner.uid === identity.uid && owner.gid === identity.gid) return;
+  try {
+    await run('/usr/bin/chown', ['-R', '--no-dereference', `${identity.user}:${identity.user}`, identity.root]);
+  } catch (error) {
+    // A partially successful walk can change the root owner too. Keep the
+    // original owner so the next deployment retries the repair.
+    await lchown(identity.root, owner.uid, owner.gid).catch(() => {});
+    throw error;
+  }
 }
 
 async function clearPasswordLock() {

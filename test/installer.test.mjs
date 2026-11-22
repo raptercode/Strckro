@@ -27,6 +27,43 @@ test('host activation uses the release Node major and defaults legacy releases t
   }
 });
 
+test('project account setup only traverses the release tree to repair ownership', async () => {
+  const helper = await readFile(new URL('../scripts/hostmgr-deploy-helper.mjs', import.meta.url), 'utf8');
+  const source = helper.match(/async function ensureProjectUser\(identity\) \{[\s\S]*?\n\}/)[0];
+  const user = 'hostmgr-app';
+  const root = '/srv/hostmgr/projects/app';
+  for (const [accountExists, owner, needsRepair, repairFails] of [
+    [true, { uid: 994, gid: 984 }, false, false],
+    [false, { uid: 994, gid: 984 }, false, false],
+    [true, { uid: 0, gid: 0 }, true, false],
+    [true, { uid: 994, gid: 0 }, true, true]
+  ]) {
+    const commands = [];
+    const restored = [];
+    const identity = { user, root };
+    let hasAccount = accountExists;
+    const ensure = runInNewContext(`${source}; ensureProjectUser`, {
+      lookupUserGroupId: async () => 984, mkdir: async () => {}, lstat: async () => owner,
+      lchown: async (...args) => restored.push(args),
+      clearPasswordLock: async () => {},
+      run: async (command, args) => {
+        commands.push({ command, args: Array.from(args) });
+        if (command === '/usr/sbin/useradd') hasAccount = true;
+        if (command === '/usr/bin/id' && !hasAccount) throw new Error('Account is missing');
+        if (command === '/usr/bin/chown' && repairFails) throw new Error('Ownership repair failed');
+        return '994';
+      }
+    });
+    if (repairFails) await assert.rejects(ensure(identity), /Ownership repair failed/);
+    else await ensure(identity);
+    assert.equal(identity.uid, 994);
+    assert.equal(identity.gid, 984);
+    assert.deepEqual(commands.filter(({ command }) => command === '/usr/bin/chown').map(({ args }) => args),
+      needsRepair ? [['-R', '--no-dereference', `${user}:${user}`, root]] : []);
+    assert.deepEqual(restored, repairFails ? [[root, owner.uid, owner.gid]] : []);
+  }
+});
+
 test('installer systemd and Nginx heredocs contain no command substitutions', async () => {
   const script = await readFile(new URL('../strckro.sh', import.meta.url), 'utf8');
   const heredocs = [...script.matchAll(/<<EOF\r?\n([\s\S]*?)\r?\nEOF/g)].map((match) => match[1]);

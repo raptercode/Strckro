@@ -14,7 +14,7 @@ test('replacing or shrinking domains renews the existing certificate with exactl
   const calls = [];
   const issue = runInNewContext(`(${extract(helper, 'issueCertificate')})`, {
     acmeEmail: async () => 'owner@example.test', ACME_ROOT: '/acme',
-    certificateName: () => 'hostmgr-app', HelperError: Error,
+    certificateName: () => 'hostmgr-app', HelperError: Error, process: { env: {} },
     run: async (command, args) => { calls.push({ command, args }); return '192.0.2.1'; }
   });
   await issue({ slug: 'app', domains: { hosts: ['new.example.test'] } });
@@ -40,7 +40,7 @@ test('certificate issuance falls back to public DNS when getent retains a negati
   let issued = false;
   const issue = runInNewContext(`(${extract(helper, 'issueCertificate')})`, {
     acmeEmail: async () => 'owner@example.test', ACME_ROOT: '/acme',
-    certificateName: () => 'hostmgr-app', HelperError: Error,
+    certificateName: () => 'hostmgr-app', HelperError: Error, process: { env: {} },
     resolvePublicDomainAddresses: async hostname => {
       assert.equal(hostname, 'api.holaezgame.com');
       return ['187.52.115.194'];
@@ -52,6 +52,37 @@ test('certificate issuance falls back to public DNS when getent retains a negati
   });
   await issue({ slug: 'app', domains: { hosts: ['api.holaezgame.com'] } });
   assert.equal(issued, true, 'public DNS should let Certbot perform its authoritative HTTP-01 validation');
+});
+
+test('project certificate issuance retries only a Certbot lock conflict', async () => {
+  const pauses = [];
+  let attempts = 0;
+  let failure = 'Another instance of Certbot is already running.';
+  let releaseLock = true;
+  const issue = runInNewContext(`(${extract(helper, 'issueCertificate')})`, {
+    acmeEmail: async () => 'owner@example.test', ACME_ROOT: '/acme', certificateName: () => 'hostmgr-app', HelperError: Error,
+    delay: async (ms) => { pauses.push(ms); if (releaseLock) failure = null; }, process: { env: {} },
+    run: async (command) => {
+      if (command.endsWith('/getent')) return '192.0.2.1';
+      attempts += 1;
+      if (failure) throw Object.assign(new Error('TLS request failed'), { commandOutput: failure });
+    }
+  });
+  const project = { slug: 'app', domains: { hosts: ['app.example.test'] } };
+  await issue(project);
+  assert.equal(attempts, 2);
+  assert.deepEqual(pauses, [5000]);
+
+  failure = 'Challenge validation failed';
+  await assert.rejects(issue(project), /TLS request failed/);
+  assert.equal(attempts, 3);
+  assert.deepEqual(pauses, [5000]);
+
+  releaseLock = false;
+  failure = 'Another instance of Certbot is already running.';
+  await assert.rejects(issue(project), /Certbot is busy/);
+  assert.equal(attempts, 10);
+  assert.deepEqual(pauses.slice(1), Array(6).fill(5000));
 });
 
 test('public DNS fallback tolerates one failed resolver and deduplicates validated addresses', async () => {
@@ -145,7 +176,8 @@ test('new-domain HTTP-01 preflight keeps existing HTTPS routes until issuance su
     ensureUnmatchedNginx: async () => {}, assertDomainsAreAvailable: async () => {}, snapshotNginx: async () => ({ site: previous }),
     mkdir: async () => {}, writeNginx: async (_site, _enabled, value) => writes.push(value),
     renderHttpSite: () => 'server {\n    listen 80;\n    server_name old.example.test new.example.test;\n}\n', preserveManagedTlsForChallenge,
-    testAndReloadNginx: async () => {},
+    testAndReloadNginx: async () => {}, certificateName: () => 'hostmgr-app',
+    canReuseProjectCertificate: async () => false,
     issueCertificate: async () => { assert.match(writes[0], /listen 443 ssl;[\s\S]*old\.example\.test/); throw new Error('ACME fixture failure'); },
     restoreNginx: async () => { restored = true; }
   });
@@ -153,6 +185,51 @@ test('new-domain HTTP-01 preflight keeps existing HTTPS routes until issuance su
   assert.equal(restored, true);
   assert.match(writes[0], /server_name old\.example\.test new\.example\.test/);
   assert.match(writes[0], /ssl_certificate \/previous\/fullchain\.pem/);
+});
+
+test('deploy reuses an eligible project certificate during a renewal and still checks the edge', async () => {
+  const calls = [];
+  const project = { slug: 'app', domains: { hosts: ['app.example.test'] } };
+  const apply = runInNewContext(`(${extract(helper, 'applyDomains')})`, {
+    join: (...parts) => parts.join('/'), NGINX_AVAILABLE: '/available', NGINX_ENABLED: '/enabled', ACME_ROOT: '/acme',
+    ensureUnmatchedNginx: async () => {}, assertDomainsAreAvailable: async () => {}, snapshotNginx: async () => ({}),
+    mkdir: async () => {}, writeNginx: async (_site, _enabled, config) => calls.push(config),
+    certificateName: () => 'hostmgr-app', renderTlsSite: () => 'TLS site',
+    canReuseProjectCertificate: async (name, hosts) => {
+      assert.equal(name, 'hostmgr-app');
+      assert.deepEqual(hosts, project.domains.hosts);
+      return true;
+    },
+    renderHttpSite: () => 'HTTP challenge site', preserveManagedTlsForChallenge: content => content,
+    testAndReloadNginx: async () => calls.push('reload'), assertProjectEdge: async () => calls.push('edge check'),
+    issueCertificate: async () => { throw new Error('Another instance of Certbot is already running.'); },
+    restoreNginx: async () => calls.push('restore')
+  });
+  await apply(project);
+  assert.deepEqual(calls, ['TLS site', 'reload', 'edge check']);
+});
+
+test('certificate reuse requires the exact DNS names, a key, and more than 30 days of validity', async () => {
+  const certificate = {
+    validFrom: '2026-10-19T00:00:00Z', validTo: '2027-01-17T00:00:00Z',
+    subjectAltName: 'DNS:second.example.test, DNS:app.example.test'
+  };
+  let hasKey = true;
+  const canReuse = runInNewContext(`(${extract(helper, 'canReuseProjectCertificate')})`, {
+    Date: { now: () => Date.parse('2026-11-16T00:00:00Z'), parse: Date.parse },
+    readFile: async () => certificate,
+    access: async () => { if (!hasKey) throw new Error('Missing key'); },
+    X509Certificate: function (fixture) { return fixture; }
+  });
+  const hosts = ['app.example.test', 'second.example.test'];
+  assert.equal(await canReuse('hostmgr-app', hosts), true);
+  assert.equal(await canReuse('hostmgr-app', [hosts[0]]), false);
+  assert.equal(await canReuse('hostmgr-app', [hosts[0], 'new.example.test']), false);
+  hasKey = false;
+  assert.equal(await canReuse('hostmgr-app', hosts), false);
+  hasKey = true;
+  certificate.validTo = '2026-12-15T00:00:00Z';
+  assert.equal(await canReuse('hostmgr-app', hosts), false);
 });
 
 test('Verify and edge inspection reject domains that are not assigned to the project', async t => {
